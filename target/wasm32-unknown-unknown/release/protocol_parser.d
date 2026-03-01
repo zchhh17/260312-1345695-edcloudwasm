@@ -1,0 +1,1 @@
+D:\github\cloud_wasm\protocol-parser\target\wasm32-unknown-unknown\release\protocol_parser.wasm: D:\github\cloud_wasm\protocol-parser\src\404.html.gz D:\github\cloud_wasm\protocol-parser\src\index.html.gz D:\github\cloud_wasm\protocol-parser\src\lib.rs
