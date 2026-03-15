@@ -711,33 +711,29 @@ const handlePost = async (request) => {
     }
     return new Response(new ReadableStream({
         async start(controller) {
-            const writable = {
-                send: (chunk) => {
-                    if (isGrpc) {
-                        chunk = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
-                        const len = chunk.byteLength;
-                        let varintLen = 0, tempLen = len;
-                        do {tempLen >>>= 7, varintLen++} while (tempLen > 0);
-                        const totalPayloadLen = 1 + varintLen + len;
-                        const grpcFrame = new Uint8Array(5 + totalPayloadLen);
-                        grpcFrame[0] = 0;
-                        grpcFrame[1] = (totalPayloadLen >>> 24) & 0xFF;
-                        grpcFrame[2] = (totalPayloadLen >>> 16) & 0xFF;
-                        grpcFrame[3] = (totalPayloadLen >>> 8) & 0xFF;
-                        grpcFrame[4] = totalPayloadLen & 0xFF;
-                        grpcFrame[5] = 0x0A;
-                        let offset = 6;
-                        tempLen = len;
-                        while (tempLen > 127) {
-                            grpcFrame[offset++] = (tempLen & 0x7F) | 0x80;
-                            tempLen >>>= 7;
-                        }
-                        grpcFrame[offset++] = tempLen;
-                        grpcFrame.set(chunk, offset);
-                        controller.enqueue(grpcFrame);
-                    } else {controller.enqueue(chunk)}
+            const send = isGrpc ? (chunk) => {
+                const data = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
+                const len = data.byteLength;
+                let varintLen = 1;
+                for (let v = len >>> 7; v; v >>>= 7) varintLen++;
+                const totalPayloadLen = 1 + varintLen + len;
+                const grpcFrame = new Uint8Array(5 + totalPayloadLen);
+                grpcFrame[0] = 0;
+                grpcFrame[1] = totalPayloadLen >>> 24;
+                grpcFrame[2] = totalPayloadLen >>> 16;
+                grpcFrame[3] = totalPayloadLen >>> 8;
+                grpcFrame[4] = totalPayloadLen;
+                grpcFrame[5] = 0x0A;
+                let p = 6, v = len;
+                while (v > 127) {
+                    grpcFrame[p++] = (v & 0x7F) | 0x80;
+                    v >>>= 7;
                 }
-            };
+                grpcFrame[p++] = v;
+                grpcFrame.set(data, p);
+                controller.enqueue(grpcFrame);
+            } : (chunk) => controller.enqueue(chunk);
+            const writable = {send};
             const close = () => {reader.releaseLock(), state.tcpSocket?.close(), controller.close()};
             try {
                 let used = 0, offset = 0;
@@ -757,7 +753,7 @@ const handlePost = async (request) => {
                                 let p = grpcData[0] === 0x0A ? 1 : 0;
                                 while (p && grpcData[p++] & 0x80) ;
                                 const payload = p === 0 ? grpcData : grpcData.subarray(p);
-                                if (payload.length > 0) {state.tcpWriter ? state.tcpWriter(payload) : await handleSession(payload, state, request, writable, close)}
+                                state.tcpWriter ? state.tcpWriter(payload) : await handleSession(payload, state, request, writable, close);
                             } else {break}
                         }
                         if (offset < bufLen) {
@@ -772,12 +768,13 @@ const handlePost = async (request) => {
                         if (done) break;
                         sessionBuffer = value.buffer;
                         used += value.byteLength;
-                        const currentBuf = new Uint8Array(sessionBuffer, 0, used);
-                        if (state.tcpWriter || currentBuf[0] === 5 || state.socks5State || used >= 32) {
-                            const payload = currentBuf.subarray();
-                            state.tcpWriter ? state.tcpWriter(payload) : await handleSession(payload, state, request, writable, close);
-                            used = 0;
-                        }
+                        const payload = new Uint8Array(sessionBuffer, 0, used);
+                        if (state.tcpWriter) {
+                            state.tcpWriter(payload);
+                        } else if (payload[0] === 5 || state.socks5State || used >= 32) {
+                            await handleSession(payload, state, request, writable, close);
+                        } else {continue}
+                        used = 0;
                     }
                 }
             } finally {close()}
