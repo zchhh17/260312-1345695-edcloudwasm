@@ -48,160 +48,146 @@ static ERROR_HTML: &[u8] = include_bytes!("404.html.gz");
 // 导出函数
 // ==========================================
 
+/// 获取 RESULT 数组指针
 #[no_mangle]
 pub unsafe extern "C" fn getResultPtr() -> *const i32 {
     core::ptr::addr_of!(RESULT) as *const i32
 }
+/// 获取通用数据缓冲区指针
 #[no_mangle]
 pub unsafe extern "C" fn getDataPtr() -> *const u8 {
     core::ptr::addr_of!(COMMON_BUF) as *const u8
 }
+/// 获取 UUID 缓冲区指针
 #[no_mangle]
 pub unsafe extern "C" fn getUuidPtr() -> *const u8 {
     core::ptr::addr_of!(UUID) as *const u8
 }
+/// 获取 HTTP 认证缓冲区指针
 #[no_mangle]
 pub unsafe extern "C" fn getHttpAuthPtr() -> *const u8 {
     core::ptr::addr_of!(HTTP_AUTH) as *const u8
 }
+/// 获取 SOCKS5 认证缓冲区指针
 #[no_mangle]
 pub unsafe extern "C" fn getSocks5AuthPtr() -> *const u8 {
     core::ptr::addr_of!(SOCKS5_AUTH) as *const u8
 }
 
+/// 获取面板 HTML 资源指针
 #[no_mangle]
 pub unsafe extern "C" fn getPanelHtmlPtr() -> *const u8 {
     PANEL_HTML.as_ptr()
 }
+/// 获取面板 HTML 资源长度
 #[no_mangle]
 pub unsafe extern "C" fn getPanelHtmlLen() -> i32 {
     PANEL_HTML.len() as i32
 }
+/// 获取错误页 HTML 资源指针
 #[no_mangle]
 pub unsafe extern "C" fn getErrorHtmlPtr() -> *const u8 {
     ERROR_HTML.as_ptr()
 }
+/// 获取错误页 HTML 资源长度
 #[no_mangle]
 pub unsafe extern "C" fn getErrorHtmlLen() -> i32 {
     ERROR_HTML.len() as i32
 }
 
+/// 设置 HTTP 认证长度
 #[no_mangle]
 pub unsafe extern "C" fn setHttpAuthLenWasm(len: i32) {
-    RESULT[2] = len;
+    *RESULT.get_unchecked_mut(2) = len;
 }
 
+/// 设置 SOCKS5 认证长度
 #[no_mangle]
 pub unsafe extern "C" fn setSocks5AuthLenWasm(len: i32) {
-    RESULT[3] = len;
+    *RESULT.get_unchecked_mut(3) = len;
 }
 
 // ==========================================
-// 节点生成与字符串混淆逻辑 (高强度动态对抗版)
+// 节点生成与字符串常量 (明文极速版)
 // ==========================================
-
-// 全局动态密钥，默认为错误的值，防止静态分析工具直接扫描
-static mut DYNAMIC_XOR_KEY: u8 = 0x00;
-
-#[no_mangle]
-pub unsafe extern "C" fn initWasm(key: u8) {
-    // 接收外部传入的 90，减去 156 
-    // 90 - 156 = -66，底层 u8 自动溢出环绕为 190
-    DYNAMIC_XOR_KEY = key.wrapping_sub(156);
-}
-
-// 编译期真实加密密钥: 190 (通过 90 减 156 溢出得到)
-const COMPILE_XOR_KEY: u8 = 190;
-
-// 编译期常量函数：在编译时将字符串异或加密，WASM二进制文件中不会出现明文
-const fn obf<const N: usize>(s: &[u8; N]) -> [u8; N] {
-    let mut out = [0; N];
-    let mut i = 0;
-    while i < N {
-        out[i] = s[i] ^ COMPILE_XOR_KEY;
-        i += 1;
-    }
-    out
-}
-
-// 极速运行时解密：利用算出来的 DYNAMIC_XOR_KEY 直接在内存中还原
-#[inline(always)]
-unsafe fn decode_xor(src: &[u8], dst: *mut u8) -> i32 {
-    let len = src.len();
-    for i in 0..len {
-        *dst.add(i) = *src.get_unchecked(i) ^ DYNAMIC_XOR_KEY;
-    }
-    len as i32
-}
 
 static TEMPLATES: [&[u8]; 12] = [
-    &obf(b"vless://{{UUID}}@{{IP}}:{{port}}?sni={{HOST}}&host={{HOST}}&path={{PATH}}&encryption=none&security=tls&fp=chrome&alpn=http%2F1.1&insecure=1&allowInsecure=0&type=ws#ws-vless-{{name}}"),
-    &obf(b"vless://{{UUID}}@{{IP}}:{{port}}?sni={{HOST}}&host={{HOST}}&path={{PATH}}&encryption=none&security=tls&fp=chrome&allowInsecure=0&type=ws&ech={{ECHDNS}}&alpn=http%2F1.1&insecure=0#[ECH]-ws-vless-{{name}}"),
-    &obf(b"vless://{{UUID}}@{{IP}}:{{port}}?sni={{HOST}}&host={{HOST}}&path={{PATH}}&encryption=none&security=tls&fp=chrome&alpn=h2&type=xhttp&headerType=none&mode=stream-one&extra=%7B%22xPaddingObfsMode%22%3Atrue%2C%22xPaddingMethod%22%3A%22tokenish%22%2C%22xPaddingHeader%22%3A%22referer%22%2C%22xPaddingKey%22%3A%22key%22%7D#xhttp-vless-{{name}}"),
-    &obf(b"vless://{{UUID}}@{{IP}}:{{port}}?sni={{HOST}}&host={{HOST}}&path={{PATH}}&encryption=none&security=tls&fp=chrome&type=xhttp&headerType=none&ech={{ECHDNS}}&alpn=h2&insecure=0&mode=stream-one&extra=%7B%22xPaddingObfsMode%22%3Atrue%2C%22xPaddingMethod%22%3A%22tokenish%22%2C%22xPaddingHeader%22%3A%22referer%22%2C%22xPaddingKey%22%3A%22key%22%7D#[ECH]-xhttp-vless-{{name}}"),
-    &obf(b"vless://{{UUID}}@{{IP}}:{{port}}?sni={{HOST}}&host={{HOST}}&serviceName={{PATH}}&encryption=none&security=tls&fp=chrome&alpn=h2&type=grpc&mode=gun&insecure=1&allowInsecure=0#grpc-vless-{{name}}"),
-    &obf(b"vless://{{UUID}}@{{IP}}:{{port}}?sni={{HOST}}&host={{HOST}}&serviceName={{PATH}}&encryption=none&security=tls&fp=chrome&alpn=h2&type=grpc&mode=gun&ech={{ECHDNS}}&allowInsecure=0&insecure=0#[ECH]-grpc-vless-{{name}}"),
-    &obf(b"trojan://{{PASSWORD}}@{{IP}}:{{port}}?sni={{HOST}}&host={{HOST}}&path={{PATH}}&security=tls&fp=chrome&alpn=http%2F1.1&insecure=1&allowInsecure=0&type=ws#ws-trojan-{{name}}"),
-    &obf(b"trojan://{{PASSWORD}}@{{IP}}:{{port}}?sni={{HOST}}&host={{HOST}}&path={{PATH}}&security=tls&fp=chrome&allowInsecure=0&type=ws&ech={{ECHDNS}}&alpn=http%2F1.1&insecure=0#[ECH]-ws-trojan-{{name}}"),
-    &obf(b"trojan://{{PASSWORD}}@{{IP}}:{{port}}?sni={{HOST}}&host={{HOST}}&path={{PATH}}&encryption=none&security=tls&fp=chrome&alpn=h2&type=xhttp&headerType=none&mode=stream-one&extra=%7B%22xPaddingObfsMode%22%3Atrue%2C%22xPaddingMethod%22%3A%22tokenish%22%2C%22xPaddingHeader%22%3A%22referer%22%2C%22xPaddingKey%22%3A%22key%22%7D#xhttp-trojan-{{name}}"),
-    &obf(b"trojan://{{PASSWORD}}@{{IP}}:{{port}}?sni={{HOST}}&host={{HOST}}&path={{PATH}}&encryption=none&security=tls&fp=chrome&type=xhttp&headerType=none&ech={{ECHDNS}}&alpn=h2&insecure=0&mode=stream-one&extra=%7B%22xPaddingObfsMode%22%3Atrue%2C%22xPaddingMethod%22%3A%22tokenish%22%2C%22xPaddingHeader%22%3A%22referer%22%2C%22xPaddingKey%22%3A%22key%22%7D#[ECH]-xhttp-trojan-{{name}}"),
-    &obf(b"trojan://{{PASSWORD}}@{{IP}}:{{port}}?sni={{HOST}}&host={{HOST}}&serviceName={{PATH}}&security=tls&fp=chrome&alpn=h2&type=grpc&mode=gun&insecure=1&allowInsecure=0#grpc-trojan-{{name}}"),
-    &obf(b"trojan://{{PASSWORD}}@{{IP}}:{{port}}?sni={{HOST}}&host={{HOST}}&serviceName={{PATH}}&security=tls&fp=chrome&alpn=h2&type=grpc&mode=gun&ech={{ECHDNS}}&allowInsecure=0&insecure=0#[ECH]-grpc-trojan-{{name}}"),
+    b"vless://{{UUID}}@{{IP}}:{{port}}?sni={{HOST}}&host={{HOST}}&path={{PATH}}&encryption=none&security=tls&fp=chrome&alpn=http%2F1.1&insecure=1&allowInsecure=0&type=ws#ws-vless-{{name}}",
+    b"vless://{{UUID}}@{{IP}}:{{port}}?sni={{HOST}}&host={{HOST}}&path={{PATH}}&encryption=none&security=tls&fp=chrome&allowInsecure=0&type=ws&ech={{ECHDNS}}&alpn=http%2F1.1&insecure=0#[ECH]-ws-vless-{{name}}",
+    b"vless://{{UUID}}@{{IP}}:{{port}}?sni={{HOST}}&host={{HOST}}&path={{PATH}}&encryption=none&security=tls&fp=chrome&alpn=h2&type=xhttp&headerType=none&mode=stream-one&extra=%7B%22xPaddingObfsMode%22%3Atrue%2C%22xPaddingMethod%22%3A%22tokenish%22%2C%22xPaddingHeader%22%3A%22referer%22%2C%22xPaddingKey%22%3A%22key%22%7D#xhttp-vless-{{name}}",
+    b"vless://{{UUID}}@{{IP}}:{{port}}?sni={{HOST}}&host={{HOST}}&path={{PATH}}&encryption=none&security=tls&fp=chrome&type=xhttp&headerType=none&ech={{ECHDNS}}&alpn=h2&insecure=0&mode=stream-one&extra=%7B%22xPaddingObfsMode%22%3Atrue%2C%22xPaddingMethod%22%3A%22tokenish%22%2C%22xPaddingHeader%22%3A%22referer%22%2C%22xPaddingKey%22%3A%22key%22%7D#[ECH]-xhttp-vless-{{name}}",
+    b"vless://{{UUID}}@{{IP}}:{{port}}?sni={{HOST}}&host={{HOST}}&serviceName={{PATH}}&encryption=none&security=tls&fp=chrome&alpn=h2&type=grpc&mode=gun&insecure=1&allowInsecure=0#grpc-vless-{{name}}",
+    b"vless://{{UUID}}@{{IP}}:{{port}}?sni={{HOST}}&host={{HOST}}&serviceName={{PATH}}&encryption=none&security=tls&fp=chrome&alpn=h2&type=grpc&mode=gun&ech={{ECHDNS}}&allowInsecure=0&insecure=0#[ECH]-grpc-vless-{{name}}",
+    b"trojan://{{PASSWORD}}@{{IP}}:{{port}}?sni={{HOST}}&host={{HOST}}&path={{PATH}}&security=tls&fp=chrome&alpn=http%2F1.1&insecure=1&allowInsecure=0&type=ws#ws-trojan-{{name}}",
+    b"trojan://{{PASSWORD}}@{{IP}}:{{port}}?sni={{HOST}}&host={{HOST}}&path={{PATH}}&security=tls&fp=chrome&allowInsecure=0&type=ws&ech={{ECHDNS}}&alpn=http%2F1.1&insecure=0#[ECH]-ws-trojan-{{name}}",
+    b"trojan://{{PASSWORD}}@{{IP}}:{{port}}?sni={{HOST}}&host={{HOST}}&path={{PATH}}&encryption=none&security=tls&fp=chrome&alpn=h2&type=xhttp&headerType=none&mode=stream-one&extra=%7B%22xPaddingObfsMode%22%3Atrue%2C%22xPaddingMethod%22%3A%22tokenish%22%2C%22xPaddingHeader%22%3A%22referer%22%2C%22xPaddingKey%22%3A%22key%22%7D#xhttp-trojan-{{name}}",
+    b"trojan://{{PASSWORD}}@{{IP}}:{{port}}?sni={{HOST}}&host={{HOST}}&path={{PATH}}&encryption=none&security=tls&fp=chrome&type=xhttp&headerType=none&ech={{ECHDNS}}&alpn=h2&insecure=0&mode=stream-one&extra=%7B%22xPaddingObfsMode%22%3Atrue%2C%22xPaddingMethod%22%3A%22tokenish%22%2C%22xPaddingHeader%22%3A%22referer%22%2C%22xPaddingKey%22%3A%22key%22%7D#[ECH]-xhttp-trojan-{{name}}",
+    b"trojan://{{PASSWORD}}@{{IP}}:{{port}}?sni={{HOST}}&host={{HOST}}&serviceName={{PATH}}&security=tls&fp=chrome&alpn=h2&type=grpc&mode=gun&insecure=1&allowInsecure=0#grpc-trojan-{{name}}",
+    b"trojan://{{PASSWORD}}@{{IP}}:{{port}}?sni={{HOST}}&host={{HOST}}&serviceName={{PATH}}&security=tls&fp=chrome&alpn=h2&type=grpc&mode=gun&ech={{ECHDNS}}&allowInsecure=0&insecure=0#[ECH]-grpc-trojan-{{name}}",
 ];
 
+/// 获取节点模板字符串并写入 COMMON_BUF
 #[no_mangle]
 pub unsafe extern "C" fn getTemplateWasm(index: i32) -> i32 {
     if (0..12).contains(&index) {
         let t = TEMPLATES.get_unchecked(index as usize);
-        return decode_xor(t, COMMON_BUF.as_mut_ptr());
+        core::ptr::copy_nonoverlapping(t.as_ptr(), COMMON_BUF.as_mut_ptr(), t.len());
+        return t.len() as i32;
     }
     0
 }
+
 static SECRET_STRINGS: [&[u8]; 20] = [
-    &obf(b"https://SUBAPI.cmliussss.net"),
-    &obf(b"https://raw.githubusercontent.com/cmliu/ACL4SSR/main/Clash/config/ACL4SSR_Online_Mini_MultiMode_CF.ini"),
-    &obf(b"edgetunnel"),
-    &obf(b"(https://github.com/cmliu/"),
-    &obf(b")"),
-    &obf(b"clash"),
-    &obf(b"singbox"),
-    &obf(b"surge&ver=4"),
-    &obf(b"quanx"),
-    &obf(b"loon"),
-    &obf(b"stash"),
-    &obf(b"sb"),
-    &obf(b"sing-box"),
-    &obf(b"surge"),
-    &obf(b"quantumult"),
-    &obf(b"mihomo"),
-    &obf(b"meta"),
-    &obf(b"MyCloudflareNodes"),
-    &obf(b"subconverter"),
-    &obf(b"Subconverter"),
+    b"https://SUBAPI.cmliussss.net",
+    b"https://raw.githubusercontent.com/cmliu/ACL4SSR/main/Clash/config/ACL4SSR_Online_Mini_MultiMode_CF.ini",
+    b"edgetunnel",
+    b"(https://github.com/cmliu/",
+    b")",
+    b"clash",
+    b"singbox",
+    b"surge&ver=4",
+    b"quanx",
+    b"loon",
+    b"stash",
+    b"sb",
+    b"sing-box",
+    b"surge",
+    b"quantumult",
+    b"mihomo",
+    b"meta",
+    b"MyCloudflareNodes",
+    b"subconverter",
+    b"Subconverter",
 ];
 
+/// 获取内置密钥/常量字符串并写入 COMMON_BUF
 #[no_mangle]
 pub unsafe extern "C" fn getSecretStringWasm(index: i32) -> i32 {
     if (0..20).contains(&index) {
         let s = SECRET_STRINGS.get_unchecked(index as usize);
-        return decode_xor(s, COMMON_BUF.as_mut_ptr());
+        core::ptr::copy_nonoverlapping(s.as_ptr(), COMMON_BUF.as_mut_ptr(), s.len());
+        return s.len() as i32;
     }
     0
 }
+
 // ==========================================
 // 辅助工具函数 (极致性能版)
 // ==========================================
 
+/// 极速 ASCII 转小写
 #[inline(always)]
 fn ascii_lower(b: u8) -> u8 {
     b.wrapping_add(((b.wrapping_sub(b'A') <= 25) as u8).wrapping_mul(32))
 }
 
+/// 极速设置 RESULT 槽位
 #[inline(always)]
 unsafe fn set_res(idx: usize, val: i32) {
     *RESULT.get_unchecked_mut(idx) = val;
 }
 
+/// 极速获取地址长度
 #[inline(always)]
 unsafe fn get_addr_len(at: i32, off: usize, len: usize) -> i32 {
     match at {
@@ -218,60 +204,188 @@ unsafe fn get_addr_len(at: i32, off: usize, len: usize) -> i32 {
     }
 }
 
+/// 极速写入握手回包数据
 #[inline(always)]
 unsafe fn write_handshake(data: &[u8]) {
     set_res(12, data.len() as i32);
     core::ptr::copy_nonoverlapping(data.as_ptr(), COMMON_BUF.as_mut_ptr(), data.len());
 }
+
+/// 分层块比较: simd128 > 64 > 32 > 16 > 8
+#[inline(always)]
+unsafe fn eq_bytes_u64(a: *const u8, b: *const u8, len: usize) -> bool {
+    let mut off = 0usize;
+    use core::arch::wasm32::{v128, v128_any_true, v128_load, v128_xor};
+    while off + 16 <= len {
+        let va = v128_load(a.add(off) as *const v128);
+        let vb = v128_load(b.add(off) as *const v128);
+        if v128_any_true(v128_xor(va, vb)) {
+            return false;
+        }
+        off += 16;
+    }
+
+    while off + 8 <= len {
+        if core::ptr::read_unaligned(a.add(off) as *const u64)
+            != core::ptr::read_unaligned(b.add(off) as *const u64)
+        {
+            return false;
+        }
+        off += 8;
+    }
+
+    if off + 4 <= len {
+        if core::ptr::read_unaligned(a.add(off) as *const u32)
+            != core::ptr::read_unaligned(b.add(off) as *const u32)
+        {
+            return false;
+        }
+        off += 4;
+    }
+
+    if off + 2 <= len {
+        if core::ptr::read_unaligned(a.add(off) as *const u16)
+            != core::ptr::read_unaligned(b.add(off) as *const u16)
+        {
+            return false;
+        }
+        off += 2;
+    }
+
+    if off < len && *a.add(off) != *b.add(off) {
+        return false;
+    }
+
+    true
+}
+
+/// 向前查找单字节 (SIMD 优先)
+#[inline(always)]
+unsafe fn find_byte_forward(data: *const u8, mut i: usize, end: usize, needle: u8) -> Option<usize> {
+    use core::arch::wasm32::{i8x16_eq, u8x16_bitmask, u8x16_splat, v128, v128_load};
+    let nv = u8x16_splat(needle);
+    while i + 16 <= end {
+        let vv = v128_load(data.add(i) as *const v128);
+        let mask = u8x16_bitmask(i8x16_eq(vv, nv)) as u32;
+        if mask != 0 {
+            return Some(i + mask.trailing_zeros() as usize);
+        }
+        i += 16;
+    }
+    while i < end {
+        if *data.add(i) == needle {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+/// 向后查找单字节 (SIMD 优先)
+#[inline(always)]
+unsafe fn find_byte_backward(data: *const u8, start: usize, end: usize, needle: u8) -> Option<usize> {
+    let mut tail_end = end;
+    use core::arch::wasm32::{i8x16_eq, u8x16_bitmask, u8x16_splat, v128, v128_load};
+    let nv = u8x16_splat(needle);
+    while tail_end >= start + 16 {
+        tail_end -= 16;
+        let vv = v128_load(data.add(tail_end) as *const v128);
+        let mask = u8x16_bitmask(i8x16_eq(vv, nv)) as u32;
+        if mask != 0 {
+            let hi = (31 - mask.leading_zeros()) as usize;
+            return Some(tail_end + hi);
+        }
+    }
+    while tail_end > start {
+        tail_end -= 1;
+        if *data.add(tail_end) == needle {
+            return Some(tail_end);
+        }
+    }
+    None
+}
+
+/// 查找 URL value 结束位置: '&' 或可选 '='
+#[inline(always)]
+unsafe fn find_value_end(data: *const u8, mut i: usize, end: usize, stop_eq: bool) -> usize {
+    use core::arch::wasm32::{i8x16_eq, u8x16_bitmask, u8x16_splat, v128, v128_load, v128_or};
+    let amp = u8x16_splat(b'&');
+    let eq = u8x16_splat(b'=');
+    while i + 16 <= end {
+        let vv = v128_load(data.add(i) as *const v128);
+        let mask = if stop_eq {
+            u8x16_bitmask(v128_or(i8x16_eq(vv, amp), i8x16_eq(vv, eq))) as u32
+        } else {
+            u8x16_bitmask(i8x16_eq(vv, amp)) as u32
+        };
+        if mask != 0 {
+            return i + mask.trailing_zeros() as usize;
+        }
+        i += 16;
+    }
+    while i < end {
+        let b = *data.add(i);
+        if b == b'&' || (stop_eq && b == b'=') {
+            break;
+        }
+        i += 1;
+    }
+    i
+}
+
+/// 查找下一个 URL 参数起始位置（'?' / '&' 之后）
+#[inline(always)]
+unsafe fn find_next_param_start(data: *const u8, mut i: usize, end: usize) -> Option<usize> {
+    use core::arch::wasm32::{i8x16_eq, u8x16_bitmask, u8x16_splat, v128, v128_load, v128_or};
+    let qm = u8x16_splat(b'?');
+    let amp = u8x16_splat(b'&');
+    while i + 16 <= end {
+        let vv = v128_load(data.add(i) as *const v128);
+        let mask = u8x16_bitmask(v128_or(i8x16_eq(vv, qm), i8x16_eq(vv, amp))) as u32;
+        if mask != 0 {
+            return Some(i + mask.trailing_zeros() as usize + 1);
+        }
+        i += 16;
+    }
+    while i < end {
+        let b = *data.add(i);
+        if b == b'?' || b == b'&' {
+            return Some(i + 1);
+        }
+        i += 1;
+    }
+    None
+}
+
 // ==========================================
 // 核心入站协议解析逻辑
 // ==========================================
 
+/// 解析入站代理协议 (VLESS/Trojan/SS/SOCKS5/HTTP)
 #[no_mangle]
 pub unsafe extern "C" fn parseProtocolWasm(chunk_len: i32, step: i32) -> bool {
     let len = chunk_len as usize;
-    RESULT[12] = 0; // [12] 回包长度归零
-    RESULT[4] = 0;  // [4] SOCKS5 下一步状态归零
-    RESULT[14] = 0; // [14] 是否需要更多数据归零 (0:不需要, 1:需要)
+    *RESULT.get_unchecked_mut(12) = 0; // [12] 回包长度归零
+    *RESULT.get_unchecked_mut(4) = 0;  // [4] SOCKS5 下一步状态归零
+    *RESULT.get_unchecked_mut(14) = 0; // [14] 是否需要更多数据归零 (0:不需要, 1:需要)
 
     // 1. SOCKS5 状态处理
     if step == 1 {
-        let auth_len = RESULT[3] as usize;
+        let auth_len = *RESULT.get_unchecked(3) as usize;
         if len < auth_len {
-            RESULT[14] = 1;
+            *RESULT.get_unchecked_mut(14) = 1;
             return false;
         }
         if len != auth_len {
             write_handshake(&[1, 1]);
             return false;
         }
-        let mut match_auth = true;
         let cb = COMMON_BUF.as_ptr();
         let sa = SOCKS5_AUTH.as_ptr();
-        let mut i = 0usize;
-        if auth_len >= 8 {
-            let cb64 = cb as *const u64;
-            let sa64 = sa as *const u64;
-            let n8 = auth_len / 8;
-            let mut j = 0usize;
-            while j < n8 {
-                if core::ptr::read_unaligned(cb64.add(j)) != core::ptr::read_unaligned(sa64.add(j)) {
-                    match_auth = false;
-                    break;
-                }
-                j += 1;
-            }
-            i = n8 * 8;
-        }
-        while match_auth && i < auth_len {
-            if *cb.add(i) != *sa.add(i) {
-                match_auth = false;
-            }
-            i += 1;
-        }
+        let match_auth = eq_bytes_u64(cb, sa, auth_len);
         if match_auth {
             write_handshake(&[1, 0]);
-            RESULT[4] = 2; // 下一步: 等待请求
+            *RESULT.get_unchecked_mut(4) = 2; // 下一步: 等待请求
         } else {
             write_handshake(&[1, 1]);
         }
@@ -280,7 +394,7 @@ pub unsafe extern "C" fn parseProtocolWasm(chunk_len: i32, step: i32) -> bool {
 
     if step == 2 {
         if len < 4 {
-            RESULT[14] = 1;
+            *RESULT.get_unchecked_mut(14) = 1;
             return false;
         }
         if *COMMON_BUF.get_unchecked(0) != 5 || *COMMON_BUF.get_unchecked(1) != 1 {
@@ -289,7 +403,7 @@ pub unsafe extern "C" fn parseProtocolWasm(chunk_len: i32, step: i32) -> bool {
         let at = *COMMON_BUF.get_unchecked(3) as i32;
         let al = get_addr_len(at, 4, len);
         if al == -2 {
-            RESULT[14] = 1;
+            *RESULT.get_unchecked_mut(14) = 1;
             return false;
         }
         if !(al > 0) {
@@ -298,7 +412,7 @@ pub unsafe extern "C" fn parseProtocolWasm(chunk_len: i32, step: i32) -> bool {
         let as_ = if at == 3 { 5 } else { 4 };
         let full_len = as_ + al as usize + 2;
         if len < full_len {
-            RESULT[14] = 1;
+            *RESULT.get_unchecked_mut(14) = 1;
             return false;
         }
 
@@ -317,7 +431,7 @@ pub unsafe extern "C" fn parseProtocolWasm(chunk_len: i32, step: i32) -> bool {
     }
 
     if len < 1 {
-        RESULT[14] = 1;
+        *RESULT.get_unchecked_mut(14) = 1;
         return false;
     }
     let b0 = *COMMON_BUF.get_unchecked(0);
@@ -325,16 +439,16 @@ pub unsafe extern "C" fn parseProtocolWasm(chunk_len: i32, step: i32) -> bool {
     // 2. SOCKS5 Init
     if b0 == 5 {
         if len < 2 {
-            RESULT[14] = 1;
+            *RESULT.get_unchecked_mut(14) = 1;
             return false;
         }
         let nmethods = *COMMON_BUF.get_unchecked(1) as usize;
         let full_len = 2 + nmethods;
         if len < full_len {
-            RESULT[14] = 1;
+            *RESULT.get_unchecked_mut(14) = 1;
             return false;
         }
-        let auth_len = RESULT[3] as usize;
+        let auth_len = *RESULT.get_unchecked(3) as usize;
         let required = if auth_len > 0 { 2 } else { 0 };
         let mut supported = false;
         for i in 0..nmethods {
@@ -345,7 +459,7 @@ pub unsafe extern "C" fn parseProtocolWasm(chunk_len: i32, step: i32) -> bool {
         }
         if supported {
             write_handshake(&[5, required]);
-            RESULT[4] = if required == 2 { 1 } else { 2 };
+            *RESULT.get_unchecked_mut(4) = if required == 2 { 1 } else { 2 };
         } else {
             write_handshake(&[5, 0xFF]);
         }
@@ -355,51 +469,39 @@ pub unsafe extern "C" fn parseProtocolWasm(chunk_len: i32, step: i32) -> bool {
     // 3. HTTP CONNECT
     if b0 == b'C' {
         if len < 48 {
-            RESULT[14] = 1;
+            *RESULT.get_unchecked_mut(14) = 1;
             return false;
         }
         if *COMMON_BUF.get_unchecked(1) == b'O' {
-            if *COMMON_BUF.get_unchecked(len - 4) == 13
-                && *COMMON_BUF.get_unchecked(len - 3) == 10
-                && *COMMON_BUF.get_unchecked(len - 2) == 13
-                && *COMMON_BUF.get_unchecked(len - 1) == 10
+            if core::ptr::read_unaligned(COMMON_BUF.as_ptr().add(len - 4) as *const u32)
+                == u32::from_le_bytes(*b"\r\n\r\n")
             {
-                let mut second_space = 0;
-                for i in 8..len {
-                    if *COMMON_BUF.get_unchecked(i) == 32 {
-                        second_space = i;
-                        break;
-                    }
-                }
+                let second_space = find_byte_forward(COMMON_BUF.as_ptr(), 8, len, b' ').unwrap_or(0);
                 if second_space != 0 {
-                    let auth_len = RESULT[2] as usize;
+                    let auth_len = *RESULT.get_unchecked(2) as usize;
                     if auth_len > 0 {
                         let mut match_auth = false;
                         let search_limit = if len > 1024 { 1024 } else { len };
+                        let cb = COMMON_BUF.as_ptr();
+                        let ha = HTTP_AUTH.as_ptr();
                         let mut p = second_space + 30;
-                        while p + auth_len + 6 < search_limit {
-                            if *COMMON_BUF.get_unchecked(p) == b'B'
-                                && *COMMON_BUF.get_unchecked(p + 1) == b'a'
-                                && *COMMON_BUF.get_unchecked(p + 2) == b's'
-                                && *COMMON_BUF.get_unchecked(p + 3) == b'i'
-                                && *COMMON_BUF.get_unchecked(p + 4) == b'c'
-                                && *COMMON_BUF.get_unchecked(p + 5) == 32
+                        let limit = search_limit.saturating_sub(auth_len + 6);
+                        while p <= limit {
+                            let Some(pb) = find_byte_forward(cb, p, limit + 1, b'B') else {
+                                break;
+                            };
+                            if *COMMON_BUF.get_unchecked(pb + 1) == b'a'
+                                && *COMMON_BUF.get_unchecked(pb + 2) == b's'
+                                && *COMMON_BUF.get_unchecked(pb + 3) == b'i'
+                                && *COMMON_BUF.get_unchecked(pb + 4) == b'c'
+                                && *COMMON_BUF.get_unchecked(pb + 5) == 32
                             {
-                                let mut same = true;
-                                for j in 0..auth_len {
-                                    if *COMMON_BUF.get_unchecked(p + 6 + j)
-                                        != *HTTP_AUTH.get_unchecked(j)
-                                    {
-                                        same = false;
-                                        break;
-                                    }
-                                }
-                                if same {
+                                if eq_bytes_u64(cb.add(pb + 6), ha, auth_len) {
                                     match_auth = true;
                                     break;
                                 }
                             }
-                            p += 1;
+                            p = pb + 1;
                         }
                         if !match_auth {
                             write_handshake(b"HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"proxy\"\r\n\r\n");
@@ -407,13 +509,11 @@ pub unsafe extern "C" fn parseProtocolWasm(chunk_len: i32, step: i32) -> bool {
                         }
                     }
 
-                    let mut last_colon = 0;
-                    for i in (8..second_space - 3).rev() {
-                        if *COMMON_BUF.get_unchecked(i) == 58 {
-                            last_colon = i;
-                            break;
-                        }
-                    }
+                    let last_colon = if second_space > 11 {
+                        find_byte_backward(COMMON_BUF.as_ptr(), 8, second_space - 3, b':').unwrap_or(0)
+                    } else {
+                        0
+                    };
                     if last_colon > 8 {
                         let mut port = 0;
                         for i in (last_colon + 1)..second_space {
@@ -436,40 +536,56 @@ pub unsafe extern "C" fn parseProtocolWasm(chunk_len: i32, step: i32) -> bool {
                     }
                 }
             } else {
-                RESULT[14] = 1;
+                *RESULT.get_unchecked_mut(14) = 1;
                 return false;
             }
         }
     }
 
     // 4. Trojan
-    if RESULT[1] == 1 {
+    if *RESULT.get_unchecked(1) == 1 {
         if len >= 56 {
-            let buf_ptr = COMMON_BUF.as_ptr() as *const u64;
-            let hash_ptr = HASH.as_ptr() as *const u64;
-            if core::ptr::read_unaligned(buf_ptr) == core::ptr::read_unaligned(hash_ptr)
-                && core::ptr::read_unaligned(buf_ptr.add(1)) == core::ptr::read_unaligned(hash_ptr.add(1))
-                && core::ptr::read_unaligned(buf_ptr.add(2)) == core::ptr::read_unaligned(hash_ptr.add(2))
-                && core::ptr::read_unaligned(buf_ptr.add(3)) == core::ptr::read_unaligned(hash_ptr.add(3))
-                && core::ptr::read_unaligned(buf_ptr.add(4)) == core::ptr::read_unaligned(hash_ptr.add(4))
-                && core::ptr::read_unaligned(buf_ptr.add(5)) == core::ptr::read_unaligned(hash_ptr.add(5))
-                && core::ptr::read_unaligned(buf_ptr.add(6)) == core::ptr::read_unaligned(hash_ptr.add(6))
-            {
+            let hash_ok = {
+                let a = COMMON_BUF.as_ptr();
+                let b = HASH.as_ptr();
+                use core::arch::wasm32::{v128, v128_any_true, v128_load, v128_xor};
+                let a0 = v128_load(a as *const v128);
+                let b0 = v128_load(b as *const v128);
+                if v128_any_true(v128_xor(a0, b0)) {
+                    false
+                } else {
+                    let a1 = v128_load(a.add(16) as *const v128);
+                    let b1 = v128_load(b.add(16) as *const v128);
+                    if v128_any_true(v128_xor(a1, b1)) {
+                        false
+                    } else {
+                        let a2 = v128_load(a.add(32) as *const v128);
+                        let b2 = v128_load(b.add(32) as *const v128);
+                        if v128_any_true(v128_xor(a2, b2)) {
+                            false
+                        } else {
+                            core::ptr::read_unaligned(a.add(48) as *const u64)
+                                == core::ptr::read_unaligned(b.add(48) as *const u64)
+                        }
+                    }
+                }
+            };
+            if hash_ok {
                 if len < 60 {
-                    RESULT[14] = 1;
+                    *RESULT.get_unchecked_mut(14) = 1;
                     return false;
                 }
                 let at = *COMMON_BUF.get_unchecked(59) as i32;
                 let al = get_addr_len(at, 60, len);
                 if al == -2 {
-                    RESULT[14] = 1;
+                    *RESULT.get_unchecked_mut(14) = 1;
                     return false;
                 }
                 if al > 0 {
                     let as_ = if at == 3 { 61 } else { 60 };
                     let full_len = as_ + al as usize + 4; // Addr + Port(2) + \r\n(2)
                     if len < full_len {
-                        RESULT[14] = 1;
+                        *RESULT.get_unchecked_mut(14) = 1;
                         return false;
                     }
                     let doff = as_ + al as usize;
@@ -489,20 +605,20 @@ pub unsafe extern "C" fn parseProtocolWasm(chunk_len: i32, step: i32) -> bool {
     } else {
         if len >= 58 && *COMMON_BUF.get_unchecked(56) == 13 && *COMMON_BUF.get_unchecked(57) == 10 {
             if len < 60 {
-                RESULT[14] = 1;
+                *RESULT.get_unchecked_mut(14) = 1;
                 return false;
             }
             let at = *COMMON_BUF.get_unchecked(59) as i32;
             let al = get_addr_len(at, 60, len);
             if al == -2 {
-                RESULT[14] = 1;
+                *RESULT.get_unchecked_mut(14) = 1;
                 return false;
             }
             if al > 0 {
                 let as_ = if at == 3 { 61 } else { 60 };
                 let full_len = as_ + al as usize + 4;
                 if len < full_len {
-                    RESULT[14] = 1;
+                    *RESULT.get_unchecked_mut(14) = 1;
                     return false;
                 }
                 let doff = as_ + al as usize;
@@ -523,10 +639,12 @@ pub unsafe extern "C" fn parseProtocolWasm(chunk_len: i32, step: i32) -> bool {
     // 5. VLESS
     let check_vless = if *RESULT.get_unchecked(0) == 1 {
         if len >= 17 {
-            let buf_ptr = COMMON_BUF.as_ptr().add(1) as *const u64;
-            let uuid_ptr = UUID.as_ptr() as *const u64;
-            core::ptr::read_unaligned(buf_ptr) == core::ptr::read_unaligned(uuid_ptr)
-                && core::ptr::read_unaligned(buf_ptr.add(1)) == core::ptr::read_unaligned(uuid_ptr.add(1))
+            let a = COMMON_BUF.as_ptr().add(1);
+            let b = UUID.as_ptr();
+            use core::arch::wasm32::{v128, v128_any_true, v128_load, v128_xor};
+            let va = v128_load(a as *const v128);
+            let vb = v128_load(b as *const v128);
+            !v128_any_true(v128_xor(va, vb))
         } else {
             false
         }
@@ -536,12 +654,12 @@ pub unsafe extern "C" fn parseProtocolWasm(chunk_len: i32, step: i32) -> bool {
 
     if check_vless {
         if len < 18 {
-            RESULT[14] = 1;
+            *RESULT.get_unchecked_mut(14) = 1;
             return false;
         }
         let off = 19 + (*COMMON_BUF.get_unchecked(17) as usize);
         if len < off + 4 {
-            RESULT[14] = 1;
+            *RESULT.get_unchecked_mut(14) = 1;
             return false;
         }
         let mut at = *COMMON_BUF.get_unchecked(off + 2) as i32;
@@ -550,14 +668,14 @@ pub unsafe extern "C" fn parseProtocolWasm(chunk_len: i32, step: i32) -> bool {
         }
         let al = get_addr_len(at, off + 3, len);
         if al == -2 {
-            RESULT[14] = 1;
+            *RESULT.get_unchecked_mut(14) = 1;
             return false;
         }
         if al > 0 {
             let as_ = if at == 3 { off + 4 } else { off + 3 };
             let full_len = as_ + al as usize;
             if len < full_len {
-                RESULT[14] = 1;
+                *RESULT.get_unchecked_mut(14) = 1;
                 return false;
             }
             let p = ((*COMMON_BUF.get_unchecked(off) as i32) << 8)
@@ -578,12 +696,12 @@ pub unsafe extern "C" fn parseProtocolWasm(chunk_len: i32, step: i32) -> bool {
     let at = b0 as i32;
     if at == 1 || at == 3 || at == 4 {
         if len < 2 {
-            RESULT[14] = 1;
+            *RESULT.get_unchecked_mut(14) = 1;
             return false;
         }
         let al = get_addr_len(at, 1, len);
         if al == -2 {
-            RESULT[14] = 1;
+            *RESULT.get_unchecked_mut(14) = 1;
             return false;
         }
         if al > 0 {
@@ -591,7 +709,7 @@ pub unsafe extern "C" fn parseProtocolWasm(chunk_len: i32, step: i32) -> bool {
             let port_off = addr_start + al as usize;
             let full_len = port_off + 2;
             if len < full_len {
-                RESULT[14] = 1;
+                *RESULT.get_unchecked_mut(14) = 1;
                 return false;
             }
             let p = ((*COMMON_BUF.get_unchecked(port_off) as i32) << 8)
@@ -609,12 +727,12 @@ pub unsafe extern "C" fn parseProtocolWasm(chunk_len: i32, step: i32) -> bool {
 
     // fallback: 如果是非明确SS特征头，且极有可能属于 Trojan/Vless 因为数据极短导致还未完成校验，给予最后一次保底等待
     if at != 1 && at != 3 && at != 4 {
-        if RESULT[1] == 1 && len < 56 {
-            RESULT[14] = 1;
+        if *RESULT.get_unchecked(1) == 1 && len < 56 {
+            *RESULT.get_unchecked_mut(14) = 1;
             return false;
         }
-        if RESULT[0] == 1 && len < 17 {
-            RESULT[14] = 1;
+        if *RESULT.get_unchecked(0) == 1 && len < 17 {
+            *RESULT.get_unchecked_mut(14) = 1;
             return false;
         }
     }
@@ -637,17 +755,19 @@ const K: [u32; 64] = [
     0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
 ];
 
+/// 循环右移
 #[inline(always)]
 fn rotr(x: u32, n: u32) -> u32 {
     (x >> n) | (x << (32 - n))
 }
 
+/// SHA224 单块处理
 #[inline(always)]
 unsafe fn sha224_block(state: &mut [u32; 8], block: &[u8]) {
     let mut w = [0u32; 64];
     let bp = block.as_ptr();
     for i in 0..16 {
-        w[i] = ((*bp.add(i * 4) as u32) << 24)
+        *w.get_unchecked_mut(i) = ((*bp.add(i * 4) as u32) << 24)
             | ((*bp.add(i * 4 + 1) as u32) << 16)
             | ((*bp.add(i * 4 + 2) as u32) << 8)
             | (*bp.add(i * 4 + 3) as u32);
@@ -705,6 +825,7 @@ unsafe fn sha224_block(state: &mut [u32; 8], block: &[u8]) {
     *s.add(7) = (*s.add(7)).wrapping_add(h);
 }
 
+/// 初始化 Trojan 密码 Hash
 #[no_mangle]
 pub unsafe extern "C" fn initCredentialsWasm(pass_len: i32) {
     let mut state: [u32; 8] = [
@@ -730,7 +851,7 @@ pub unsafe extern "C" fn initCredentialsWasm(pass_len: i32) {
         buffer[(rem + 1)..56].fill(0);
     }
     for i in 0..8 {
-        buffer[63 - i] = (bit_len >> (i * 8)) as u8;
+        *buffer.get_unchecked_mut(63 - i) = (bit_len >> (i * 8)) as u8;
     }
     sha224_block(&mut state, &buffer);
     const HEX: &[u8; 16] = b"0123456789abcdef";
@@ -753,162 +874,211 @@ pub unsafe extern "C" fn initCredentialsWasm(pass_len: i32) {
         i += 1;
     }
 }
+
 // ==========================================
-// URL 解析逻辑 (含缓存加速机制)
+// URL 解析逻辑 (明文极速版)
 // ==========================================
 
+/// 极速忽略大小写比较
 #[inline(always)]
 unsafe fn equals_ignore_case(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() { return false; }
-    let len = a.len();
-    let mut i = 0;
-    while i < len {
-        if ascii_lower(*a.get_unchecked(i)) != ascii_lower(*b.get_unchecked(i)) { return false; }
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0usize;
+    use core::arch::wasm32::{
+        i8x16_ge, i8x16_le, i8x16_splat, v128, v128_and, v128_any_true, v128_load, v128_or,
+        v128_xor,
+    };
+    let az_lo = i8x16_splat(b'A' as i8);
+    let az_hi = i8x16_splat(b'Z' as i8);
+    let bit_20 = i8x16_splat(32);
+    while i + 16 <= a.len() {
+        let va = v128_load(a.as_ptr().add(i) as *const v128);
+        let vb = v128_load(b.as_ptr().add(i) as *const v128);
+
+        let ma = v128_and(i8x16_ge(va, az_lo), i8x16_le(va, az_hi));
+        let mb = v128_and(i8x16_ge(vb, az_lo), i8x16_le(vb, az_hi));
+        let va_l = v128_or(va, v128_and(ma, bit_20));
+        let vb_l = v128_or(vb, v128_and(mb, bit_20));
+        if v128_any_true(v128_xor(va_l, vb_l)) {
+            return false;
+        }
+        i += 16;
+    }
+    while i < a.len() {
+        if ascii_lower(*a.get_unchecked(i)) != ascii_lower(*b.get_unchecked(i)) {
+            return false;
+        }
         i += 1;
     }
     true
 }
 
+/// 极速忽略大小写前缀匹配
 #[inline(always)]
 unsafe fn starts_with_ignore_case(data: &[u8], prefix: &[u8]) -> bool {
-    if data.len() < prefix.len() { return false; }
-    equals_ignore_case(core::slice::from_raw_parts(data.as_ptr(), prefix.len()), prefix)
+    if data.len() < prefix.len() {
+        return false;
+    }
+    equals_ignore_case(
+        core::slice::from_raw_parts(data.as_ptr(), prefix.len()),
+        prefix,
+    )
 }
 
+/// 极速匹配 URL 参数分隔符
 #[inline(always)]
 unsafe fn match_separator(d: &[u8]) -> Option<usize> {
-    if d.is_empty() { return None; }
-    if *d.get_unchecked(0) == b'=' { return Some(1); }
-    if d.len() >= 3 {
-        let p = d.as_ptr();
-        if ascii_lower(*p) == b':' && ascii_lower(*p.add(1)) == b'/' && ascii_lower(*p.add(2)) == b'/' {
-            return Some(3);
+    let len = d.len();
+    if len == 0 {
+        return None;
+    }
+    let b0 = *d.get_unchecked(0);
+    if b0 == b'=' {
+        return Some(1);
+    }
+    if len >= 3 && b0 == b':' && *d.get_unchecked(1) == b'/' && *d.get_unchecked(2) == b'/' {
+        return Some(3);
+    }
+    if len >= 7
+        && b0 == b':'
+        && *d.get_unchecked(1) == b'%'
+        && *d.get_unchecked(2) == b'2'
+        && ascii_lower(*d.get_unchecked(3)) == b'f'
+        && *d.get_unchecked(4) == b'%'
+        && *d.get_unchecked(5) == b'2'
+        && ascii_lower(*d.get_unchecked(6)) == b'f'
+    {
+        return Some(7);
+    }
+    if len >= 9 && b0 == b'%' {
+        if *d.get_unchecked(1) == b'3'
+            && ascii_lower(*d.get_unchecked(2)) == b'a'
+            && *d.get_unchecked(3) == b'%'
+            && *d.get_unchecked(4) == b'2'
+            && ascii_lower(*d.get_unchecked(5)) == b'f'
+            && *d.get_unchecked(6) == b'%'
+            && *d.get_unchecked(7) == b'2'
+            && ascii_lower(*d.get_unchecked(8)) == b'f'
+        {
+            return Some(9);
         }
     }
-    if d.len() >= 9 && *d.get_unchecked(0) == b'%' && *d.get_unchecked(1) == b'3' && ascii_lower(*d.get_unchecked(2)) == b'a'
-        && *d.get_unchecked(3) == b'%' && *d.get_unchecked(4) == b'2' && ascii_lower(*d.get_unchecked(5)) == b'f'
-        && *d.get_unchecked(6) == b'%' && *d.get_unchecked(7) == b'2' && ascii_lower(*d.get_unchecked(8)) == b'f'
-    { return Some(9); }
     None
 }
 
-// 供编译期加密映射的配置项结构
-struct UrlKey {
+struct UrlKeyDef {
     buf: &'static [u8],
     res_idx: usize,
     is_g: bool,
 }
 
-static URL_PARSE_KEYS: [UrlKey; 14] = [
-    UrlKey { buf: &obf(b"gs5"), res_idx: 15, is_g: true },
-    UrlKey { buf: &obf(b"s5all"), res_idx: 15, is_g: true },
-    UrlKey { buf: &obf(b"ghttp"), res_idx: 17, is_g: true },
-    UrlKey { buf: &obf(b"gnat64"), res_idx: 19, is_g: true },
-    UrlKey { buf: &obf(b"nat64all"), res_idx: 19, is_g: true },
-    UrlKey { buf: &obf(b"httpall"), res_idx: 17, is_g: true },
-    UrlKey { buf: &obf(b"gturn"), res_idx: 24, is_g: true },
-    UrlKey { buf: &obf(b"turnall"), res_idx: 24, is_g: true },
-    UrlKey { buf: &obf(b"s5"), res_idx: 15, is_g: false },
-    UrlKey { buf: &obf(b"socks"), res_idx: 15, is_g: false },
-    UrlKey { buf: &obf(b"http"), res_idx: 17, is_g: false },
-    UrlKey { buf: &obf(b"ip"), res_idx: 21, is_g: false },
-    UrlKey { buf: &obf(b"nat64"), res_idx: 19, is_g: false },
-    UrlKey { buf: &obf(b"turn"), res_idx: 24, is_g: false },
+static URL_PARSE_KEYS: [UrlKeyDef; 14] = [
+    UrlKeyDef { buf: b"gs5", res_idx: 15, is_g: true },
+    UrlKeyDef { buf: b"s5all", res_idx: 15, is_g: true },
+    UrlKeyDef { buf: b"ghttp", res_idx: 17, is_g: true },
+    UrlKeyDef { buf: b"gnat64", res_idx: 19, is_g: true },
+    UrlKeyDef { buf: b"nat64all", res_idx: 19, is_g: true },
+    UrlKeyDef { buf: b"httpall", res_idx: 17, is_g: true },
+    UrlKeyDef { buf: b"gturn", res_idx: 24, is_g: true },
+    UrlKeyDef { buf: b"turnall", res_idx: 24, is_g: true },
+    UrlKeyDef { buf: b"s5", res_idx: 15, is_g: false },
+    UrlKeyDef { buf: b"socks", res_idx: 15, is_g: false },
+    UrlKeyDef { buf: b"http", res_idx: 17, is_g: false },
+    UrlKeyDef { buf: b"ip", res_idx: 21, is_g: false },
+    UrlKeyDef { buf: b"nat64", res_idx: 19, is_g: false },
+    UrlKeyDef { buf: b"turn", res_idx: 24, is_g: false },
 ];
 
-// 缓存解码结果的结构，避免每次请求重复解密
-struct DecodedUrlKey {
-    buf: [u8; 12],
-    len: usize,
-    res_idx: usize,
-    is_g: bool,
-}
-const EMPTY_URL_KEY: DecodedUrlKey = DecodedUrlKey { buf: [0; 12], len: 0, res_idx: 0, is_g: false };
-
-// 静态全局缓存锁 (BSS 段内存)
-static mut URL_KEYS_INIT: bool = false;
-static mut PROXYALL_STR: [u8; 8] = [0; 8];
-static mut GLOBALPROXY_STR: [u8; 11] = [0; 11];
-static mut DECODED_URL_KEYS: [DecodedUrlKey; 14] = [EMPTY_URL_KEY; 14];
-
+/// 解析 URL 参数并提取配置
 #[no_mangle]
 pub unsafe extern "C" fn parseUrlWasm(url_len: i32) {
     let len = url_len as usize;
-    let data = core::slice::from_raw_parts(COMMON_BUF.as_ptr(), len);
+    let data_ptr = COMMON_BUF.as_ptr();
     let mut is_all = false;
     
-    for i in [15, 16, 17, 18, 19, 20, 21, 22, 24, 25] { set_res(i, -1); }
-
-    // [优化] 首次调用时集中解密并常驻内存，后续请求直接读取缓存，零解密开销
-    if !URL_KEYS_INIT {
-        decode_xor(&obf(b"proxyall"), PROXYALL_STR.as_mut_ptr());
-        decode_xor(&obf(b"globalproxy"), GLOBALPROXY_STR.as_mut_ptr());
-        
-        for (idx, key) in URL_PARSE_KEYS.iter().enumerate() {
-            let k_len = decode_xor(key.buf, DECODED_URL_KEYS[idx].buf.as_mut_ptr()) as usize;
-            DECODED_URL_KEYS[idx].len = k_len;
-            DECODED_URL_KEYS[idx].res_idx = key.res_idx;
-            DECODED_URL_KEYS[idx].is_g = key.is_g;
-        }
-        URL_KEYS_INIT = true; 
+    for idx in [15, 16, 17, 18, 19, 20, 21, 22, 24, 25] {
+        set_res(idx, -1);
     }
 
-    let mut i = 0;
+    let mut i = 0usize;
     while i < len {
-        if starts_with_ignore_case(&data[i..], &PROXYALL_STR) {
+        while i < len {
+            let b = *data_ptr.add(i);
+            if b != b'?' && b != b'&' {
+                break;
+            }
+            i += 1;
+        }
+        if i >= len {
+            break;
+        }
+
+        let rem_len = len - i;
+        let rem_data = core::slice::from_raw_parts(data_ptr.add(i), rem_len);
+        
+        // [分支] 全局标志判定
+        if starts_with_ignore_case(rem_data, b"proxyall") {
             is_all = true;
             i += 8;
             continue;
         }
-        if starts_with_ignore_case(&data[i..], &GLOBALPROXY_STR) {
+        if starts_with_ignore_case(rem_data, b"globalproxy") {
             is_all = true;
             i += 11;
             continue;
         }
         
         let mut matched = false;
-        let data_i = data.as_ptr().add(i);
-        
-        // 直接对比已经缓存的明文字符串
-        for key in &DECODED_URL_KEYS {
-            let k_len = key.len;
-            let k_str = &key.buf[..k_len];
+        // [循环] 参数匹配
+        for j in 0..14 {
+            let key = URL_PARSE_KEYS.get_unchecked(j);
+            let k_len = key.buf.len();
             
-            if i + k_len <= len 
-                && ascii_lower(*data_i) == ascii_lower(*k_str.get_unchecked(0)) 
-                && starts_with_ignore_case(core::slice::from_raw_parts(data_i, len - i), k_str) 
-            {
-                let after_key = i + k_len;
-                if let Some(s_len) = match_separator(&data[after_key..]) {
-                    let v_start = after_key + s_len;
-                    let mut v_end = v_start;
-                    while v_end < len && *data.get_unchecked(v_end) != b'&' {
-                        v_end += 1;
-                    }
+            if i + k_len < len && starts_with_ignore_case(rem_data, key.buf) {
+                let after_key = core::slice::from_raw_parts(data_ptr.add(i + k_len), len - i - k_len);
+                if let Some(s_len) = match_separator(after_key) {
+                    let is_custom_sep = s_len > 1;
+                    let v_start = i + k_len + s_len;
+                    let v_end = find_value_end(data_ptr, v_start, len, is_custom_sep);
+                    
                     if v_end > v_start {
-                        if key.is_g { is_all = true; }
+                        if key.is_g {
+                            is_all = true;
+                        }
                         set_res(key.res_idx, v_start as i32);
                         set_res(key.res_idx + 1, (v_end - v_start) as i32);
-                        i = v_end;
+                        i = if v_end < len { v_end + 1 } else { v_end };
                         matched = true;
                         break;
                     }
                 }
             }
         }
-        if !matched { i += 1; }
+        if !matched {
+            if let Some(next_i) = find_next_param_start(data_ptr, i, len) {
+                i = next_i;
+            } else {
+                break;
+            }
+        }
     }
     set_res(23, if is_all { 1 } else { 0 });
 }
+
 // ==========================================
 // 地址类型修正逻辑 (极致性能版)
 // ==========================================
 
+/// 修正并识别目标地址类型 (IPv4/IPv6/Domain)
 #[no_mangle]
 pub unsafe extern "C" fn getCorrectAddrTypeWasm(len: i32) -> i32 {
     let len = len as usize;
-    let ptr = COMMON_BUF.as_ptr();
-    let char0 = *ptr;
+    if len == 0 {
+        return 3;
+    }
+    let char0 = *COMMON_BUF.get_unchecked(0);
 
     if char0 == b'[' {
         return 4;
@@ -924,12 +1094,11 @@ pub unsafe extern "C" fn getCorrectAddrTypeWasm(len: i32) -> i32 {
     let mut dots = 0u32;
     let mut part_len = 0u32;
     let mut head = 0u8;
-    let mut p = ptr;
-    let end = ptr.add(len);
+    let mut i = 0;
 
-    while p < end {
-        let b = *p;
-        p = p.add(1);
+    while i < len {
+        let b = *COMMON_BUF.get_unchecked(i);
+        i += 1;
         if b == b'.' {
             if part_len == 0 || (part_len > 1 && head == b'0') {
                 return 3;
