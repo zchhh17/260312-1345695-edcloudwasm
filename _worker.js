@@ -40,7 +40,7 @@ const dohNatEndpoints = ['https://cloudflare-dns.com/dns-query', 'https://dns.go
 const proxyIpAddrs = {EU: 'ProxyIP.DE.CMLiussss.net', AS: 'ProxyIP.SG.CMLiussss.net', JP: 'ProxyIP.JP.CMLiussss.net', US: 'ProxyIP.US.CMLiussss.net'};//分区域proxyip
 const finallyProxyHost = 'ProxyIP.CMLiussss.net';//兜底proxyip
 // 订阅和面板使用的优选ip地址，可支持ip:port#name格式
-const ipListAll = ["172.64.154.125","104.18.39.123","172.64.145.18","104.18.42.218","104.18.33.131","172.64.145.38","172.64.145.202","104.18.42.151"];
+const ipListAll = ["172.64.154.125", "104.18.39.123", "172.64.145.18", "104.18.42.218", "104.18.33.131", "172.64.145.38", "172.64.145.202", "104.18.42.151"];
 const coloRegions = {
     JP: new Set(['FUK', 'ICN', 'KIX', 'NRT', 'OKA']),
     EU: new Set([
@@ -82,7 +82,7 @@ const getEnv = (env) => {
         uuid: (env.UUID || defaultUuid).trim(),
         password: (env.PASSWORD || defaultPassword).trim(),
         user: (env.S5HTTPUSER || socks5AndHttpUser).trim(),
-        pass: (env.S5HTTPPASS || socks5AndHttpPass).trim(), 
+        pass: (env.S5HTTPPASS || socks5AndHttpPass).trim(),
         sspass: (env.SSPASS || ssAeadPassword).trim()
     };
     return config;
@@ -165,12 +165,11 @@ const createSsAeadCtx = async (salt = crypto.getRandomValues(new Uint8Array(16))
             }
             return out;
         })());
-        return crypto.subtle.importKey('raw', masterKey, 'HKDF', false, ['deriveBits']);
+        return crypto.subtle.importKey('raw', masterKey, 'HKDF', false, ['deriveKey']);
     })());
-    const subKey = new Uint8Array(await crypto.subtle.deriveBits({name: 'HKDF', hash: 'SHA-1', salt, info: ssSubkeyInfo}, hkdfKey, 128));
     return {
         salt,
-        key: await crypto.subtle.importKey('raw', subKey, {name: 'AES-GCM', length: 128}, false, ['encrypt', 'decrypt']),
+        key: await crypto.subtle.deriveKey({name: 'HKDF', hash: 'SHA-1', salt, info: ssSubkeyInfo}, hkdfKey, {name: 'AES-GCM', length: 128}, false, ['encrypt', 'decrypt']),
         nonce: new Uint8Array(12),
         pendingBuf: new Uint8Array(0),
         pendingStart: 0,
@@ -234,8 +233,11 @@ const ssAeadDecryptFeed = async (ctx, chunk, onPlain) => {
         pendingStart += ctx.nextNeed;
         ctx.nextPayloadLen = -1;
         ctx.nextNeed = 0;
-        if (onPlain) await onPlain(payload);
-        else out.push(payload), total += payload.length;
+        if (onPlain) {
+            await onPlain(payload);
+        } else {
+            out.push(payload), total += payload.length;
+        }
     }
     if (pendingStart === pendingEnd) {
         ctx.pendingStart = 0;
@@ -736,22 +738,36 @@ const establishTcpConnection = async (parsedRequest, request) => {
 const chunkIdxLookup = new Uint8Array(60);
 for (let i = 0; i < 60; i++) {
     let len = i << 9;
-    if (len < 1536) chunkIdxLookup[i] = 0;
-    else if (len < 2048) chunkIdxLookup[i] = 1;
-    else if (len < 2560) chunkIdxLookup[i] = 2;
-    else if (len < 3072) chunkIdxLookup[i] = 3;
-    else if (len < 3584) chunkIdxLookup[i] = 4;
-    else if (len < 4096) chunkIdxLookup[i] = 5;
-    else if (len < 5120) chunkIdxLookup[i] = 6;
-    else if (len < 6144) chunkIdxLookup[i] = 7;
-    else if (len < 7168) chunkIdxLookup[i] = 8;
-    else if (len < 8192) chunkIdxLookup[i] = 9;
-    else if (len < 12288) chunkIdxLookup[i] = 10;
-    else if (len < 20480) chunkIdxLookup[i] = 11;
-    else chunkIdxLookup[i] = 12;
+    if (len < 1536) {
+        chunkIdxLookup[i] = 0;
+    } else if (len < 2048) {
+        chunkIdxLookup[i] = 1;
+    } else if (len < 2560) {
+        chunkIdxLookup[i] = 2;
+    } else if (len < 3072) {
+        chunkIdxLookup[i] = 3;
+    } else if (len < 3584) {
+        chunkIdxLookup[i] = 4;
+    } else if (len < 4096) {
+        chunkIdxLookup[i] = 5;
+    } else if (len < 5120) {
+        chunkIdxLookup[i] = 6;
+    } else if (len < 6144) {
+        chunkIdxLookup[i] = 7;
+    } else if (len < 7168) {
+        chunkIdxLookup[i] = 8;
+    } else if (len < 8192) {
+        chunkIdxLookup[i] = 9;
+    } else if (len < 12288) {
+        chunkIdxLookup[i] = 10;
+    } else if (len < 20480) {
+        chunkIdxLookup[i] = 11;
+    } else {
+        chunkIdxLookup[i] = 12;
+    }
 }
 const lowerBounds = new Uint16Array([1024, 1536, 2048, 2560, 3072, 3584, 4096, 5120, 6144, 7168, 8192, 12288, 20480, 28672]);
-const smartPipeCore = async (readable, onFlush) => {
+const smartPipeCore = async (readable, onFlush, close) => {
     const safeBufferSize = bufferSize - maxChunkLen;
     let buffer = new Uint8Array(bufferSize), chunkBuf = new ArrayBuffer(maxChunkLen);
     let offset = 0, totalBytes = 0, time = 2, timerId = null, resume = null;
@@ -788,7 +804,7 @@ const smartPipeCore = async (readable, onFlush) => {
             timerId ||= setTimeout(flushBuffer, time);
             offset > safeBufferSize && (time === flushTime ? await new Promise(r => resume = r) : flushBuffer());
         }
-    } finally {flushBuffer(), reader.releaseLock()}
+    } catch {close?.()} finally {flushBuffer()}
 };
 const handleSession = async (chunk, state, request, writable, close) => {
     const allowNeedMore = state.allowNeedMore === true;
@@ -876,13 +892,13 @@ const handleSession = async (chunk, state, request, writable, close) => {
                             const encrypted = await ssAeadEncryptChunks(state.ssOutbound, raw);
                             encrypted.byteLength && writable.send(encrypted);
                         });
-                    });
+                    }, close);
                 } finally {await flushPromise}
-            })().finally(() => close());
+            })();
         } else {
             state.tcpWriter = (c) => tcpWriter.write(c);
             if (state.tcpSocket.extra?.length) writable.send(state.tcpSocket.extra);
-            smartPipeCore(state.tcpSocket.readable, raw => writable.send(raw)).finally(() => close());
+            smartPipeCore(state.tcpSocket.readable, raw => writable.send(raw), close);
         }
     }
 };
@@ -891,7 +907,7 @@ const handleWebSocketConn = async (webSocket, request) => {
     // @ts-ignore
     const earlyData = protocolHeader ? Uint8Array.fromBase64(protocolHeader, {alphabet: 'base64url'}) : null;
     const state = {socks5State: 0, tcpWriter: null, tcpSocket: null, ssInbound: null, ssOutbound: null, ssResponseSalt: null};
-    const close = () => {state.tcpSocket?.close(), !earlyData && webSocket.close()};
+    const close = () => {webSocket.close()};
     let processingChain = Promise.resolve();
     const process = async (chunk) => {
         if (state.tcpWriter) return state.tcpWriter(chunk);
@@ -899,13 +915,16 @@ const handleWebSocketConn = async (webSocket, request) => {
     };
     if (earlyData) processingChain = processingChain.then(() => process(earlyData).catch(close));
     webSocket.addEventListener("message", event => {processingChain = processingChain.then(() => process(event.data).catch(close))});
+    webSocket.addEventListener("error", close);
 };
 const grpcHeaders = {'Content-Type': 'application/grpc', 'X-Accel-Buffering': 'no', 'Cache-Control': 'no-store'};
 const xhttpHeaders = {'Content-Type': 'application/octet-stream', 'grpc-status': '0', 'X-Accel-Buffering': 'no', 'Cache-Control': 'no-store'};
 const handleGrpcPost = async (request, reader, buffer, used) => {
     const state = {socks5State: 0, tcpWriter: null, tcpSocket: null, ssInbound: null, ssOutbound: null, ssResponseSalt: null};
+    let close = () => {};
     return new Response(new ReadableStream({
         start(controller) {
+            close = () => {try {controller.close()} catch {}};
             const writable = {
                 send: (chunk) => {
                     const len = chunk.byteLength;
@@ -929,7 +948,6 @@ const handleGrpcPost = async (request, reader, buffer, used) => {
                     controller.enqueue(grpcFrame);
                 }
             };
-            const close = () => {reader.releaseLock(), state.tcpSocket?.close(), controller.close()};
             (async () => {
                 let grpcBuffer = new ArrayBuffer(73728), offset = 0;
                 if (used) new Uint8Array(grpcBuffer, 0, used).set(buffer);
@@ -957,17 +975,17 @@ const handleGrpcPost = async (request, reader, buffer, used) => {
                     grpcBuffer = value.buffer;
                     used += value.byteLength;
                 }
-            })().finally(() => close());
-        },
-        cancel() {state.tcpSocket?.close(), reader.releaseLock()}
+            })().catch(close);
+        }
     }), {headers: grpcHeaders});
 };
 const handleXhttpPost = async (request, reader, xhttpBuffer, used) => {
     const state = {socks5State: 0, tcpWriter: null, tcpSocket: null, needMore: false, allowNeedMore: true, disableSsAead: true};
+    let close = () => {};
     return new Response(new ReadableStream({
         start(controller) {
-            const writable = {send: (chunk) => controller.enqueue(chunk)};
-            const close = () => {reader.releaseLock(), state.tcpSocket?.close(), controller.close()};
+            close = () => {try {controller.close()} catch {}};
+            const writable = {send: (chunk) => {controller.enqueue(chunk)}};
             (async () => {
                 while (true) {
                     if (used > 0) {
@@ -983,9 +1001,8 @@ const handleXhttpPost = async (request, reader, xhttpBuffer, used) => {
                     xhttpBuffer = value.buffer;
                     used += value.byteLength;
                 }
-            })().finally(() => close());
-        },
-        cancel() {state.tcpSocket?.close(), reader.releaseLock()}
+            })().catch(close);
+        }
     }), {headers: xhttpHeaders});
 };
 const getErrorResponse = async (status = 200) => {
