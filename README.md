@@ -25,7 +25,8 @@
 
 ## 部署到 Cloudflare Workers ☁️
 
-> ⚠️ **重要警告（关于免费 Workers）**
+> ⚠️ <h1><font color="red"><strong>重要警告</strong></font></h1>
+> **（关于免费 Workers）**
 >
 > - 使用 **Cloudflare 免费 Workers 计划** 直接部署本项目时，当前实测可能出现 **1101 错误（Worker 内部异常）**，导致服务无法正常运行。
 > - 在 **付费 Workers 计划** 下部署可以正常工作。
