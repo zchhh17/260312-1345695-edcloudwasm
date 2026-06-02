@@ -113,7 +113,7 @@ const initializeWasm = (env) => {
         wasmMem.set(socks5Pkg, getSocks5AuthPtr());
         setSocks5AuthLenWasm(socks5Pkg.length);
     }
-    cachedTemplates = new Array(12);
+    cachedTemplates = new Array(14);
     const subUuid = uuid || crypto.randomUUID();
     const subPassword = password || crypto.randomUUID();
     globalThis.subUuid = subUuid;
@@ -125,11 +125,11 @@ const initializeWasm = (env) => {
     for (let i = 0; i < 20; i++) {strList[i] = getSecret(i)}
     const edge = strList[2];
     userAgentSuffix = edge + strList[3] + edge + strList[4];
-    for (let i = 0; i < 12; i++) {
+    for (let i = 0; i < 14; i++) {
         const len = getTemplateWasm(i);
         const tmpl = textDecoder.decode(wasmMem.subarray(dataPtr, dataPtr + len));
         const baseTmpl = tmpl.replaceAll("{{ECHDNS}}", encodeURIComponent(sharedEchDns));
-        cachedTemplates[i] = i < 6 ? baseTmpl.replaceAll("{{UUID}}", subUuid) : baseTmpl.replaceAll("{{PASSWORD}}", subPassword);
+        cachedTemplates[i] = i < 7 ? baseTmpl.replaceAll("{{UUID}}", subUuid) : baseTmpl.replaceAll("{{PASSWORD}}", subPassword);
     }
     isInitialized = true;
 };
@@ -305,13 +305,13 @@ const parseHostPort = (addr, defaultPort) => {
     }
     return [host, (port = parseInt(port), isNaN(port) ? defaultPort : port)];
 };
-const parseSubNode = (entry) => {
+const parseSubNode = (entry, defaultPort = 443) => {
     const raw = (entry || '').trim();
     if (!raw) return null;
     const hashIndex = raw.indexOf('#');
     const endpoint = hashIndex === -1 ? raw : raw.slice(0, hashIndex).trim();
     const customName = hashIndex === -1 ? '' : raw.slice(hashIndex + 1).trim();
-    const [ip, portNum] = parseHostPort(endpoint || raw, 443);
+    const [ip, portNum] = parseHostPort(endpoint || raw, defaultPort);
     return {ip, port: String(portNum), name: customName || ip};
 };
 const parseAuthString = (authParam) => {
@@ -1028,7 +1028,7 @@ const handleXhttpPost = async (request, reader, xhttpBuffer, used) => {
     return new Response(new ReadableStream({
         start(controller) {
             close = () => {try {controller.close()} catch {}};
-            const writable = {send: (chunk) => {controller.enqueue(chunk)}};
+            const writable = {send: (chunk) => controller.enqueue(chunk)};
             (async () => {
                 while (true) {
                     if (used > 0) {
@@ -1063,25 +1063,26 @@ const getSub = async (request, url, uuid) => {
     const hasXhttp = url.searchParams.get('xhttp') === '1';
     const hasGRPC = url.searchParams.get('grpc') === '1';
     const hasECH = url.searchParams.get('ech') === '1';
+    const hasWsNoTLS = url.searchParams.get('wstls') === '0' || url.searchParams.get('wsnotls') === '1';
     const encPath = encodeURIComponent(proxyPath);
     const parts = [];
-    const processTemplate = (index) => {
+    const processTemplate = (index, defaultPort = 443) => {
         if (cachedTemplates[index]) {
             const tmpl = cachedTemplates[index].replaceAll("{{HOST}}", host).replaceAll("{{PATH}}", encPath);
             ipListAll.forEach(entry => {
-                const node = parseSubNode(entry);
+                const node = parseSubNode(entry, defaultPort);
                 if (!node) return;
                 parts.push(tmpl.replaceAll("{{IP}}", node.ip).replaceAll("{{port}}", node.port).replaceAll("{{name}}", node.name));
             });
         }
     };
     const addNodes = (base) => {
-        if (hasWS) processTemplate(base + (hasECH ? 1 : 0));
-        if (hasXhttp) processTemplate(base + (hasECH ? 3 : 2));
-        if (hasGRPC) processTemplate(base + (hasECH ? 5 : 4));
+        if (hasWS) processTemplate(base + (hasWsNoTLS ? 2 : hasECH ? 1 : 0), hasWsNoTLS ? 80 : 443);
+        if (hasXhttp) processTemplate(base + (hasECH ? 4 : 3));
+        if (hasGRPC) processTemplate(base + (hasECH ? 6 : 5));
     };
     if (hasVL) addNodes(0);
-    if (hasTR) addNodes(6);
+    if (hasTR) addNodes(7);
     const finalLinks = parts.join("\n");
     const base64Links = btoa(unescape(encodeURIComponent(finalLinks)));
     if (ua.includes(strList[18])) return new Response(base64Links, {headers: {'Content-Type': 'text/plain; charset=utf-8'}});
@@ -1093,7 +1094,7 @@ const getSub = async (request, url, uuid) => {
                     : (url.searchParams.has(strList[9]) || ua.includes(strList[9])) ? strList[9]
                         : (url.searchParams.has(strList[10]) || ua.includes(strList[10])) ? strList[10] : '';
     if (target) {
-        const baseUrl = `${url.protocol}//${url.host}${url.pathname}?uuid=${globalThis.subUuid}&format=raw&path=${encPath}&vl=${hasVL ? 1 : 0}&tj=${hasTR ? 1 : 0}&ws=${hasWS ? 1 : 0}&xhttp=${hasXhttp ? 1 : 0}&grpc=${hasGRPC ? 1 : 0}`;
+        const baseUrl = `${url.protocol}//${url.host}${url.pathname}?uuid=${globalThis.subUuid}&format=raw&path=${encPath}&vl=${hasVL ? 1 : 0}&tj=${hasTR ? 1 : 0}&ws=${hasWS ? 1 : 0}&wstls=${hasWsNoTLS ? 0 : 1}&xhttp=${hasXhttp ? 1 : 0}&grpc=${hasGRPC ? 1 : 0}&ech=${hasECH ? 1 : 0}`;
         const convertUrl = `${strList[0]}/sub?target=${target}&url=${encodeURIComponent(baseUrl)}&insert=false&config=${encodeURIComponent(strList[1])}&emoji=true&scv=true`;
         try {
             const response = await fetch(convertUrl, {
