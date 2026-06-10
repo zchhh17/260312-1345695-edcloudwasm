@@ -60,12 +60,14 @@ const textEncoder = new TextEncoder(), textDecoder = new TextDecoder();
 import wasmModule from './protocol.wasm';
 const instance = new WebAssembly.Instance(wasmModule);
 const {
-    memory, getUuidPtr, getResultPtr, getDataPtr, getHttpAuthPtr, getSocks5AuthPtr, setHttpAuthLenWasm, setSocks5AuthLenWasm, parseProtocolWasm, parseUrlWasm,
-    initCredentialsWasm, getPanelHtmlPtr, getPanelHtmlLen, getErrorHtmlPtr, getErrorHtmlLen, getCorrectAddrTypeWasm, getTemplateWasm, getSecretStringWasm
+    memory, getUuidPtr, getResultPtr, getDataPtr, getHttpAuthPtr, getSocks5AuthPtr, getGrpcFramePtr, getGrpcFrameMaxPayloadWasm, setHttpAuthLenWasm, setSocks5AuthLenWasm, parseProtocolWasm, parseUrlWasm,
+    initCredentialsWasm, getPanelHtmlPtr, getPanelHtmlLen, getErrorHtmlPtr, getErrorHtmlLen, getCorrectAddrTypeWasm, getTemplateWasm, getSecretStringWasm, encodeGrpcFrameWasm
 } = instance.exports;
 const wasmMem = new Uint8Array(memory.buffer);
 const wasmRes = new Int32Array(memory.buffer, getResultPtr(), 32);
 const dataPtr = getDataPtr();
+const grpcFramePtr = getGrpcFramePtr();
+const grpcFrameMaxPayload = getGrpcFrameMaxPayloadWasm();
 let isInitialized = false, rawHtml = null, rawErrorHtml = null, config = null, cachedTemplates = null, strList = null, userAgentSuffix = null;
 const decompressWasm = async (ptrFn, lenFn) => {
     const ptr = ptrFn(), len = lenFn();
@@ -971,24 +973,12 @@ const handleGrpcPost = async (request, reader, buffer, used) => {
             const writable = {
                 send: (chunk) => {
                     const len = chunk.byteLength;
-                    let varintLen = 1;
-                    for (let v = len >>> 7; v; v >>>= 7) varintLen++;
-                    const totalPayloadLen = 1 + varintLen + len;
-                    const grpcFrame = new Uint8Array(5 + totalPayloadLen);
-                    grpcFrame[0] = 0;
-                    grpcFrame[1] = totalPayloadLen >>> 24;
-                    grpcFrame[2] = totalPayloadLen >>> 16;
-                    grpcFrame[3] = totalPayloadLen >>> 8;
-                    grpcFrame[4] = totalPayloadLen;
-                    grpcFrame[5] = 0x0A;
-                    let p = 6, v = len;
-                    while (v > 127) {
-                        grpcFrame[p++] = (v & 0x7F) | 0x80;
-                        v >>>= 7;
-                    }
-                    grpcFrame[p++] = v;
-                    grpcFrame.set(chunk, p);
-                    controller.enqueue(grpcFrame);
+                    if (!len) return;
+                    if (len > grpcFrameMaxPayload) return close();
+                    wasmMem.set(chunk, grpcFramePtr);
+                    const frameLen = encodeGrpcFrameWasm(len);
+                    if (frameLen <= 0) return close();
+                    controller.enqueue(wasmMem.slice(grpcFramePtr, grpcFramePtr + frameLen));
                 }
             };
             (async () => {
