@@ -858,6 +858,61 @@ const manualPipe = async (readable, writable, close) => {
         }
     } catch {close?.(), isClose = true} finally {isReading = false, flushBuffer()}
 };
+const createBufferedTcpWriter = (tcpWriter, close) => {
+    let writeQueue = [], drainQueue = [], bundleBuffer = null, busy = false, isClosed = false;
+    const closeWriter = () => {
+        if (isClosed) return;
+        isClosed = true, writeQueue.length = 0, drainQueue.length = 0, close?.();
+    };
+    const drain = async () => {
+        if (busy || isClosed) return;
+        busy = true;
+        try {
+            while (writeQueue.length && !isClosed) {
+                const tasks = writeQueue;
+                writeQueue = drainQueue;
+                drainQueue = tasks;
+                let head = 0, taskLen = tasks.length;
+                while (head < taskLen && !isClosed) {
+                    const data = tasks[head];
+                    let len = data.byteLength, end = head + 1;
+                    if (len < maxChunkLen) {
+                        while (end < taskLen) {
+                            const nextLen = len + tasks[end].byteLength;
+                            if (nextLen > maxChunkLen) break;
+                            len = nextLen, end++;
+                        }
+                    }
+                    if (end === head + 1) {
+                        tasks[head++] = undefined;
+                        await tcpWriter.write(data);
+                    } else {
+                        const out = bundleBuffer ||= new Uint8Array(maxChunkLen);
+                        out.set(data);
+                        tasks[head++] = undefined;
+                        for (let offset = data.byteLength; head < end;) {
+                            const q = tasks[head];
+                            tasks[head++] = undefined;
+                            out.set(q, offset), offset += q.byteLength;
+                        }
+                        await tcpWriter.write(out.subarray(0, len));
+                    }
+                }
+                tasks.length = 0;
+            }
+        } catch {closeWriter()} finally {
+            busy = false;
+            writeQueue.length && !isClosed && drain();
+        }
+    };
+    return (chunk) => {
+        if (isClosed) return false;
+        const data = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
+        if (!data.byteLength) return true;
+        writeQueue.push(data), !busy && drain();
+        return true;
+    };
+};
 const handleSession = async (chunk, state, request, writable, close, isEarlyData = false) => {
     const allowNeedMore = state.allowNeedMore === true;
     if (allowNeedMore) state.needMore = false;
@@ -914,11 +969,12 @@ const handleSession = async (chunk, state, request, writable, close, isEarlyData
         state.tcpSocket = await establishTcpConnection(parsedRequest, request);
         if (!state.tcpSocket) return close();
         const tcpWriter = state.tcpSocket.writable.getWriter();
-        if (payload.byteLength) await tcpWriter.write(payload);
+        const bufferedTcpWriter = createBufferedTcpWriter(tcpWriter, close);
+        if (payload.byteLength) tcpWriter.write(payload);
         if (isSs || state.ssOutbound) {
             state.tcpWriter = async (c) => {
                 await ssAeadDecryptFeed(state.ssInbound, c instanceof Uint8Array ? c : new Uint8Array(c), async plain => {
-                    if (plain.byteLength) await tcpWriter.write(plain);
+                    if (plain.byteLength) bufferedTcpWriter(plain);
                 });
             };
             state.ssResponseSalt?.length && writable.send(state.ssResponseSalt);
@@ -941,7 +997,7 @@ const handleSession = async (chunk, state, request, writable, close, isEarlyData
                 } finally {await flushPromise}
             })();
         } else {
-            state.tcpWriter = (c) => tcpWriter.write(c);
+            state.tcpWriter = bufferedTcpWriter;
             if (state.tcpSocket.extra?.length) writable.send(state.tcpSocket.extra);
             manualPipe(state.tcpSocket.readable, writable, close);
         }
