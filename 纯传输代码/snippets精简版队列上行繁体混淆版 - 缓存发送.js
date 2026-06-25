@@ -248,13 +248,9 @@ const 手動資料管線 = async (可讀流, 可寫通道, 關閉連線) => {
         if (正在讀取) return 需要刷新 = true;
         快速刷新 = 偏移量 < 快速刷新偏移量;
         if (偏移量 > 0 && !已關閉) {
-            if (偏移量 > 安全緩衝區大小) {
-                可寫通道.send(緩衝區視圖.subarray(0, 偏移量));
-                緩衝區 = new ArrayBuffer(緩衝區大小);
-                緩衝區視圖 = new Uint8Array(緩衝區);
-            } else {
-                可寫通道.send(緩衝區視圖.slice(0, 偏移量));
-            }
+            偏移量 > 安全緩衝區大小
+                ? (可寫通道.send(緩衝區視圖.subarray(0, 偏移量)), 緩衝區 = new ArrayBuffer(緩衝區大小), 緩衝區視圖 = new Uint8Array(緩衝區))
+                : 可寫通道.send(緩衝區視圖.slice(0, 偏移量));
             偏移量 = 0;
         }
         需要刷新 = false, 保護刷新 = false, 計時器識別 && (clearTimeout(計時器識別), 計時器識別 = null), 恢復函式?.(), 恢復函式 = null;
@@ -268,19 +264,9 @@ const 手動資料管線 = async (可讀流, 可寫通道, 關閉連線) => {
             使用備用 && (讀取緩衝區 = 備用緩衝區, 讀取偏移量 = 0, 正在讀取 = false);
             const {done: 是否完成, value: 讀取值} = await 讀取器.read(new Uint8Array(讀取緩衝區, 讀取偏移量, 最大區塊長度));
             正在讀取 = false;
-            if (使用備用) {
-                緩衝區視圖.set(讀取值, 偏移量);
-                備用緩衝區 = 讀取值.buffer;
-            } else {
-                緩衝區 = 讀取值.buffer;
-                緩衝區視圖 = new Uint8Array(緩衝區);
-            }
+            使用備用 ? (緩衝區視圖.set(讀取值, 偏移量), 備用緩衝區 = 讀取值.buffer) : (緩衝區 = 讀取值.buffer, 緩衝區視圖 = new Uint8Array(緩衝區));
             if (是否完成) break;
             const 區塊長度 = 讀取值.byteLength;
-            if (!區塊長度) {
-                需要刷新 && 刷新輸出();
-                continue;
-            }
             偏移量 += 區塊長度;
             if (需要刷新) {
                 刷新輸出();
@@ -302,9 +288,7 @@ const 手動資料管線 = async (可讀流, 可寫通道, 關閉連線) => {
                     }
                     if (區塊長度 < 下限陣列[最大索引]) {
                         總位元組 = 0, 時間 = 1;
-                    } else if ((總位元組 += 區塊長度) > 啟動閾值) {
-                        時間 = 刷新時間;
-                    }
+                    } else if ((總位元組 += 區塊長度) > 啟動閾值) 時間 = 刷新時間;
                 }
                 計時器識別 ||= setTimeout(刷新輸出, 時間), 保護刷新 = 區塊長度 < 最大區塊長度;
                 偏移量 > 安全緩衝區大小 && (時間 === 刷新時間 ? await new Promise(結果值 => 恢復函式 = 結果值) : 刷新輸出());
@@ -313,100 +297,112 @@ const 手動資料管線 = async (可讀流, 可寫通道, 關閉連線) => {
     } catch {關閉連線?.(), 已關閉 = true} finally {正在讀取 = false, 刷新輸出()}
 };
 const 建立緩衝傳輸控制寫入器 = (寫入函式, 關閉連線) => {
-    let 寫入佇列 = [], 備用佇列 = [], 聚合緩衝區 = null, 排空中 = false, 已關閉 = false;
+    const 佇列 = new Array(4096);
+    let 佇首 = 0, 佇尾 = 0, 佇數量 = 0, 聚合緩衝區 = null, 排空中 = false, 已關閉 = false;
     const 關閉寫入器 = () => {
         if (已關閉) return;
-        已關閉 = true, 寫入佇列.length = 0, 備用佇列.length = 0, 關閉連線?.();
+        已關閉 = true;
+        for (let 索引 = 0; 索引 < 4096; 索引++) 佇列[索引] = null;
+        關閉連線?.();
     };
     const 排空佇列 = async () => {
         if (已關閉) return;
         排空中 = true;
         try {
-            while (寫入佇列.length && !已關閉) {
-                const 佇列 = 寫入佇列;
-                寫入佇列 = 備用佇列;
-                備用佇列 = 佇列;
-                let 索引 = 0, 佇列長度 = 佇列.length;
-                while (索引 < 佇列長度 && !已關閉) {
-                    const 區塊 = 佇列[索引];
-                    let 聚合長度 = 區塊.byteLength, 聚合結束 = 索引 + 1;
-                    if (聚合長度 < 最大區塊長度) {
-                        while (聚合結束 < 佇列長度) {
-                            const 下一長度 = 聚合長度 + 佇列[聚合結束].byteLength;
-                            if (下一長度 > 最大區塊長度) break;
-                            聚合長度 = 下一長度, 聚合結束++;
-                        }
-                    }
-                    if (聚合結束 === 索引 + 1) {
-                        佇列[索引++] = undefined;
-                        await 寫入函式.write(區塊);
-                    } else {
-                        const 緩衝區 = 聚合緩衝區 ||= new Uint8Array(最大區塊長度);
-                        緩衝區.set(區塊);
-                        佇列[索引++] = undefined;
-                        for (let 偏移量 = 區塊.byteLength; 索引 < 聚合結束;) {
-                            const 下一區塊 = 佇列[索引];
-                            佇列[索引++] = undefined;
-                            緩衝區.set(下一區塊, 偏移量), 偏移量 += 下一區塊.byteLength;
-                        }
-                        await 寫入函式.write(緩衝區.subarray(0, 聚合長度));
-                    }
+            while (佇數量 > 0 && !已關閉) {
+                let 區塊 = 佇列[佇首];
+                if (區塊.byteLength >= 最大區塊長度) {
+                    佇列[佇首] = null, 佇首 = (佇首 + 1) & 4095, 佇數量--;
+                    await 寫入函式.write(區塊);
+                    continue;
                 }
-                佇列.length = 0;
+                let 聚合長度 = 0;
+                聚合緩衝區 ||= new Uint8Array(最大區塊長度);
+                while (佇數量 > 0) {
+                    區塊 = 佇列[佇首];
+                    if (聚合長度 + 區塊.byteLength > 最大區塊長度) break;
+                    聚合緩衝區.set(區塊, 聚合長度), 聚合長度 += 區塊.byteLength;
+                    佇列[佇首] = null, 佇首 = (佇首 + 1) & 4095, 佇數量--;
+                }
+                if (聚合長度 > 0) await 寫入函式.write(聚合緩衝區.subarray(0, 聚合長度));
             }
         } catch {關閉寫入器()} finally {
             排空中 = false;
-            if (寫入佇列.length && !已關閉) {
-                排空中 = true;
-                queueMicrotask(排空佇列);
-            }
+            if (佇數量 > 0 && !已關閉) 排空中 = true, queueMicrotask(排空佇列);
         }
     };
-    return (區塊值) => {
+    return 區塊值 => {
         if (已關閉) return false;
         const 資料 = 區塊值 instanceof Uint8Array ? 區塊值 : new Uint8Array(區塊值);
         if (!資料.byteLength) return true;
-        寫入佇列.push(資料);
-        if (!排空中) {
-            排空中 = true;
-            queueMicrotask(排空佇列);
-        }
+        if (佇數量 === 4096) return 關閉寫入器(), false;
+        佇列[佇尾] = 資料, 佇尾 = (佇尾 + 1) & 4095, 佇數量++;
+        if (!排空中) 排空中 = true, queueMicrotask(排空佇列);
         return true;
+    };
+};
+const 建立异步微任務佇列 = (消耗函式, 關閉連線) => {
+    const 佇列 = new Array(2048);
+    let 佇首 = 0, 佇尾 = 0, 佇數量 = 0, 排空中 = false, 已關閉 = false;
+    const 排空佇列 = async () => {
+        if (已關閉) return;
+        排空中 = true;
+        try {
+            while (佇數量 > 0 && !已關閉) {
+                const 區塊 = 佇列[佇首];
+                佇列[佇首] = null, 佇首 = (佇首 + 1) & 2047, 佇數量--;
+                const 結果 = 消耗函式(區塊);
+                if (結果?.then) await 結果;
+            }
+        } catch {已關閉 = true, 關閉連線?.()} finally {
+            排空中 = false;
+            if (佇數量 > 0 && !已關閉) 排空中 = true, queueMicrotask(排空佇列);
+        }
+    };
+    return 區塊 => {
+        if (已關閉) return;
+        if (佇數量 === 2048) return 已關閉 = true, 關閉連線?.();
+        佇列[佇尾] = 區塊, 佇尾 = (佇尾 + 1) & 2047, 佇數量++;
+        if (!排空中) 排空中 = true, queueMicrotask(排空佇列);
     };
 };
 const 處理網頁套接字連線 = async (網頁套接字連線, 請求) => {
     const 協議標頭 = 請求.headers.get('sec-websocket-protocol');
     // @ts-ignore
     const 早期資料 = 協議標頭 ? Uint8Array.fromBase64(協議標頭, {alphabet: 'base64url'}) : null;
-    let 傳輸控制寫入器, 處理鏈 = Promise.resolve(), 已解析請求, 傳輸控制插槽;
+    let 傳輸控制寫入器, 處理佇列 = null, 已解析請求, 傳輸控制插槽;
     const 關閉連線 = () => {網頁套接字連線.close()};
-    const 處理訊息 = async (資料區塊) => {
+    const 處理 = 資料區塊 => {
         try {
             if (傳輸控制寫入器) return 傳輸控制寫入器(資料區塊);
-            資料區塊 = 早期資料 ? 資料區塊 : new Uint8Array(資料區塊);
-            if (資料區塊.length > 58 && 資料區塊[56] === 13 && 資料區塊[57] === 10) {
-                已解析請求 = 解析透明代理封包(資料區塊);
-            } else if ((已解析請求 = 解析請求封包(資料區塊))) {
-                網頁套接字連線.send(new Uint8Array([資料區塊[0], 0]));
-            } else {已解析請求 = 解析影子代理封包(資料區塊)}
-            if (!已解析請求) return 關閉連線();
-            const 負載資料 = 資料區塊.subarray(已解析請求.資料偏移);
-            傳輸控制插槽 = await 建立傳輸控制連線(已解析請求, 請求);
-            if (!傳輸控制插槽) return 關閉連線();
-            const 寫入函式 = 傳輸控制插槽.writable.getWriter();
-            if (負載資料.byteLength) 寫入函式.write(負載資料);
-            傳輸控制寫入器 = 建立緩衝傳輸控制寫入器(寫入函式, 關閉連線);
-            手動資料管線(傳輸控制插槽.readable, 網頁套接字連線, 關閉連線);
+            return (async () => {
+                資料區塊 = 早期資料 ? 資料區塊 : new Uint8Array(資料區塊);
+                if (資料區塊.length > 58 && 資料區塊[56] === 13 && 資料區塊[57] === 10) {
+                    已解析請求 = 解析透明代理封包(資料區塊);
+                } else if ((已解析請求 = 解析請求封包(資料區塊))) {
+                    網頁套接字連線.send(new Uint8Array([資料區塊[0], 0]));
+                } else {已解析請求 = 解析影子代理封包(資料區塊)}
+                if (!已解析請求) return 關閉連線();
+                const 負載資料 = 資料區塊.subarray(已解析請求.資料偏移);
+                傳輸控制插槽 = await 建立傳輸控制連線(已解析請求, 請求);
+                if (!傳輸控制插槽) return 關閉連線();
+                const 寫入函式 = 傳輸控制插槽.writable.getWriter();
+                if (負載資料.byteLength) 寫入函式.write(負載資料);
+                傳輸控制寫入器 = 建立緩衝傳輸控制寫入器(寫入函式, 關閉連線);
+                手動資料管線(傳輸控制插槽.readable, 網頁套接字連線, 關閉連線);
+            })();
         } catch {關閉連線()}
     };
-    if (早期資料) 處理鏈 = 處理鏈.then(() => 處理訊息(早期資料).catch(關閉連線));
-    網頁套接字連線.addEventListener("message", 事件 => 處理鏈 = 處理鏈.then(() => 處理訊息(事件.data).catch(關閉連線)));
+    處理佇列 = 建立异步微任務佇列(處理, 關閉連線);
+    if (早期資料) 處理佇列(早期資料);
+    網頁套接字連線.addEventListener("message", 事件 => (傳輸控制寫入器 || 處理佇列)(事件.data));
     網頁套接字連線.addEventListener("error", 關閉連線);
 };
 export default {
     async fetch(請求) {
         if (請求.headers.get('Upgrade') === 'websocket') {
             const {0: 客戶端插槽, 1: 網頁套接字連線} = new WebSocketPair();
+            // @ts-ignore
             網頁套接字連線.accept({allowHalfOpen: true}), 網頁套接字連線.binaryType = "arraybuffer";
             處理網頁套接字連線(網頁套接字連線, 請求);
             return new Response(null, {status: 101, webSocket: 客戶端插槽});
