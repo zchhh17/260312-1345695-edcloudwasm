@@ -393,22 +393,21 @@ const manualPipe = async (readable, writable, close) => {
     } catch {close?.(), isClose = true} finally {isReading = false, flushBuffer(true)}
 };
 const createBufferedTcpWriter = (tcpWriter, close) => {
-    const queue = new Array(4096);
+    const queue = new Array(2048);
     let head = 0, tail = 0, size = 0, coalesceBuffer = null, drainActive = false, closed = false;
     const closeWriter = () => {
         if (closed) return;
         closed = true;
-        for (let i = 0; i < 4096; i++) queue[i] = null;
+        for (let i = 0; i < 2048; i++) queue[i] = null;
         close?.();
     };
     const drainQueue = async () => {
         if (closed) return;
-        drainActive = true;
         try {
             while (size > 0 && !closed) {
                 let chunk = queue[head];
                 if (chunk.byteLength >= maxChunkLen) {
-                    queue[head] = null, head = (head + 1) & 4095, size--;
+                    queue[head] = null, head = (head + 1) & 2047, size--;
                     await tcpWriter.write(chunk);
                     continue;
                 }
@@ -418,47 +417,44 @@ const createBufferedTcpWriter = (tcpWriter, close) => {
                     chunk = queue[head];
                     if (mergedLength + chunk.byteLength > maxChunkLen) break;
                     coalesceBuffer.set(chunk, mergedLength), mergedLength += chunk.byteLength;
-                    queue[head] = null, head = (head + 1) & 4095, size--;
+                    queue[head] = null, head = (head + 1) & 2047, size--;
                 }
                 if (mergedLength > 0) await tcpWriter.write(coalesceBuffer.subarray(0, mergedLength));
             }
-        } catch {closeWriter()} finally {
-            drainActive = false;
-            if (size > 0 && !closed) drainActive = true, queueMicrotask(drainQueue);
-        }
+        } catch {closeWriter()} finally {drainActive = false}
     };
     return chunk => {
-        if (closed) return false;
-        const data = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
-        if (!data.byteLength) return true;
-        if (size === 4096) return closeWriter(), false;
-        queue[tail] = data, tail = (tail + 1) & 4095, size++;
+        if (closed) return;
+        const data = chunk.constructor === Uint8Array ? chunk : new Uint8Array(chunk);
+        if (!data.byteLength) return;
+        if (size === 2048) return closeWriter();
+        queue[tail] = data, tail = (tail + 1) & 2047, size++;
         if (!drainActive) drainActive = true, queueMicrotask(drainQueue);
-        return true;
     };
 };
 const createAsyncMicrotaskQueue = (consume, close) => {
-    const queue = new Array(2048);
+    const queue = new Array(1024);
     let head = 0, tail = 0, size = 0, drainActive = false, closed = false;
+    const closeQueue = () => {
+        if (closed) return;
+        closed = true;
+        for (let i = 0; i < 1024; i++) queue[i] = null;
+        close?.();
+    };
     const drainQueue = async () => {
         if (closed) return;
-        drainActive = true;
         try {
             while (size > 0 && !closed) {
                 const chunk = queue[head];
-                queue[head] = null, head = (head + 1) & 2047, size--;
-                const res = consume(chunk);
-                if (res?.then) await res;
+                queue[head] = null, head = (head + 1) & 1023, size--;
+                await consume(chunk);
             }
-        } catch {closed = true, close?.()} finally {
-            drainActive = false;
-            if (size > 0 && !closed) drainActive = true, queueMicrotask(drainQueue);
-        }
+        } catch {closeQueue()} finally {drainActive = false}
     };
     return chunk => {
         if (closed) return;
-        if (size === 2048) return closed = true, close?.();
-        queue[tail] = chunk, tail = (tail + 1) & 2047, size++;
+        if (size === 1024) return closeQueue();
+        queue[tail] = chunk, tail = (tail + 1) & 1023, size++;
         if (!drainActive) drainActive = true, queueMicrotask(drainQueue);
     };
 };

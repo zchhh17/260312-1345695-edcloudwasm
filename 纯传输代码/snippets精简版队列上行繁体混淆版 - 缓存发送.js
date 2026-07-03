@@ -283,22 +283,21 @@ const 手動資料管線 = async (可讀流, 可寫通道, 關閉連線) => {
     } catch {關閉連線?.(), 已關閉 = true} finally {正在讀取 = false, 刷新輸出(true)}
 };
 const 建立緩衝傳輸控制寫入器 = (寫入函式, 關閉連線) => {
-    const 佇列 = new Array(4096);
+    const 佇列 = new Array(2048);
     let 佇首 = 0, 佇尾 = 0, 佇數量 = 0, 聚合緩衝區 = null, 排空中 = false, 已關閉 = false;
     const 關閉寫入器 = () => {
         if (已關閉) return;
         已關閉 = true;
-        for (let 索引 = 0; 索引 < 4096; 索引++) 佇列[索引] = null;
+        for (let 索引 = 0; 索引 < 2048; 索引++) 佇列[索引] = null;
         關閉連線?.();
     };
     const 排空佇列 = async () => {
         if (已關閉) return;
-        排空中 = true;
         try {
             while (佇數量 > 0 && !已關閉) {
                 let 區塊 = 佇列[佇首];
                 if (區塊.byteLength >= 最大區塊長度) {
-                    佇列[佇首] = null, 佇首 = (佇首 + 1) & 4095, 佇數量--;
+                    佇列[佇首] = null, 佇首 = (佇首 + 1) & 2047, 佇數量--;
                     await 寫入函式.write(區塊);
                     continue;
                 }
@@ -308,47 +307,44 @@ const 建立緩衝傳輸控制寫入器 = (寫入函式, 關閉連線) => {
                     區塊 = 佇列[佇首];
                     if (聚合長度 + 區塊.byteLength > 最大區塊長度) break;
                     聚合緩衝區.set(區塊, 聚合長度), 聚合長度 += 區塊.byteLength;
-                    佇列[佇首] = null, 佇首 = (佇首 + 1) & 4095, 佇數量--;
+                    佇列[佇首] = null, 佇首 = (佇首 + 1) & 2047, 佇數量--;
                 }
                 if (聚合長度 > 0) await 寫入函式.write(聚合緩衝區.subarray(0, 聚合長度));
             }
-        } catch {關閉寫入器()} finally {
-            排空中 = false;
-            if (佇數量 > 0 && !已關閉) 排空中 = true, queueMicrotask(排空佇列);
-        }
+        } catch {關閉寫入器()} finally {排空中 = false}
     };
     return 區塊值 => {
-        if (已關閉) return false;
-        const 資料 = 區塊值 instanceof Uint8Array ? 區塊值 : new Uint8Array(區塊值);
-        if (!資料.byteLength) return true;
-        if (佇數量 === 4096) return 關閉寫入器(), false;
-        佇列[佇尾] = 資料, 佇尾 = (佇尾 + 1) & 4095, 佇數量++;
+        if (已關閉) return;
+        const 資料 = 區塊值.constructor === Uint8Array ? 區塊值 : new Uint8Array(區塊值);
+        if (!資料.byteLength) return;
+        if (佇數量 === 2048) return 關閉寫入器();
+        佇列[佇尾] = 資料, 佇尾 = (佇尾 + 1) & 2047, 佇數量++;
         if (!排空中) 排空中 = true, queueMicrotask(排空佇列);
-        return true;
     };
 };
 const 建立异步微任務佇列 = (消耗函式, 關閉連線) => {
-    const 佇列 = new Array(2048);
+    const 佇列 = new Array(1024);
     let 佇首 = 0, 佇尾 = 0, 佇數量 = 0, 排空中 = false, 已關閉 = false;
+    const 關閉佇列 = () => {
+        if (已關閉) return;
+        已關閉 = true;
+        for (let 索引 = 0; 索引 < 1024; 索引++) 佇列[索引] = null;
+        關閉連線?.();
+    };
     const 排空佇列 = async () => {
         if (已關閉) return;
-        排空中 = true;
         try {
             while (佇數量 > 0 && !已關閉) {
                 const 區塊 = 佇列[佇首];
-                佇列[佇首] = null, 佇首 = (佇首 + 1) & 2047, 佇數量--;
-                const 結果 = 消耗函式(區塊);
-                if (結果?.then) await 結果;
+                佇列[佇首] = null, 佇首 = (佇首 + 1) & 1023, 佇數量--;
+                await 消耗函式(區塊);
             }
-        } catch {已關閉 = true, 關閉連線?.()} finally {
-            排空中 = false;
-            if (佇數量 > 0 && !已關閉) 排空中 = true, queueMicrotask(排空佇列);
-        }
+        } catch {關閉佇列()} finally {排空中 = false}
     };
     return 區塊 => {
         if (已關閉) return;
-        if (佇數量 === 2048) return 已關閉 = true, 關閉連線?.();
-        佇列[佇尾] = 區塊, 佇尾 = (佇尾 + 1) & 2047, 佇數量++;
+        if (佇數量 === 1024) return 關閉佇列();
+        佇列[佇尾] = 區塊, 佇尾 = (佇尾 + 1) & 1023, 佇數量++;
         if (!排空中) 排空中 = true, queueMicrotask(排空佇列);
     };
 };
