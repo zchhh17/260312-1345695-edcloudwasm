@@ -40,13 +40,6 @@ static mut UUID: [u8; 16] = [0; 16]; // VLESS UUID
 static mut HASH: [u8; 56] = [0; 56]; // Trojan Hash
 static mut HTTP_AUTH: [u8; 256] = [0; 256]; // HTTP Auth (Base64) - 256 字节
 static mut SOCKS5_AUTH: [u8; 256] = [0; 256]; // SOCKS5 Auth Packet (Raw bytes) - 256 字节
-const GRPC_FRAME_SOURCE_MAX_PAYLOAD: usize = 512 * 1024;
-const SS_AEAD_CHUNK_MAX: usize = 16_383;
-const SS_AEAD_CHUNK_OVERHEAD: usize = 34;
-const GRPC_FRAME_MAX_PAYLOAD: usize = GRPC_FRAME_SOURCE_MAX_PAYLOAD
-    + ((GRPC_FRAME_SOURCE_MAX_PAYLOAD + SS_AEAD_CHUNK_MAX - 1) / SS_AEAD_CHUNK_MAX) * SS_AEAD_CHUNK_OVERHEAD;
-const GRPC_FRAME_BUF_LEN: usize = GRPC_FRAME_MAX_PAYLOAD + 16;
-static mut GRPC_FRAME_BUF: [u8; GRPC_FRAME_BUF_LEN] = [0; GRPC_FRAME_BUF_LEN];
 
 // 预编译打包的 Web 页面资源
 static PANEL_HTML: &[u8] = include_bytes!("index.html.gz");
@@ -81,16 +74,6 @@ pub unsafe extern "C" fn getHttpAuthPtr() -> *const u8 {
 pub unsafe extern "C" fn getSocks5AuthPtr() -> *const u8 {
     core::ptr::addr_of!(SOCKS5_AUTH) as *const u8
 }
-/// 获取 gRPC 下行封包缓冲区指针
-#[no_mangle]
-pub unsafe extern "C" fn getGrpcFramePtr() -> *const u8 {
-    core::ptr::addr_of!(GRPC_FRAME_BUF) as *const u8
-}
-/// 获取 gRPC 下行封包支持的最大 payload
-#[no_mangle]
-pub unsafe extern "C" fn getGrpcFrameMaxPayloadWasm() -> i32 {
-    GRPC_FRAME_MAX_PAYLOAD as i32
-}
 
 /// 获取面板 HTML 资源指针
 #[no_mangle]
@@ -123,53 +106,6 @@ pub unsafe extern "C" fn setHttpAuthLenWasm(len: i32) {
 #[no_mangle]
 pub unsafe extern "C" fn setSocks5AuthLenWasm(len: i32) {
     *RESULT.get_unchecked_mut(3) = len;
-}
-
-/// 将放在 gRPC 缓冲区起始位置的 payload 原地封装成 gRPC-Web frame
-#[no_mangle]
-pub unsafe extern "C" fn encodeGrpcFrameWasm(payload_len: i32) -> i32 {
-    if payload_len <= 0 {
-        return 0;
-    }
-    let len = payload_len as usize;
-    if len > GRPC_FRAME_MAX_PAYLOAD {
-        return 0;
-    }
-
-    let mut varint_len = 1usize;
-    let mut v = len;
-    while v > 127 {
-        varint_len += 1;
-        v >>= 7;
-    }
-
-    let header_len = 6 + varint_len;
-    let frame_len = header_len + len;
-    if frame_len > GRPC_FRAME_BUF_LEN {
-        return 0;
-    }
-
-    let buf = GRPC_FRAME_BUF.as_mut_ptr();
-    core::ptr::copy(buf, buf.add(header_len), len);
-
-    let total_payload_len = 1 + varint_len + len;
-    *buf.add(0) = 0;
-    *buf.add(1) = (total_payload_len >> 24) as u8;
-    *buf.add(2) = (total_payload_len >> 16) as u8;
-    *buf.add(3) = (total_payload_len >> 8) as u8;
-    *buf.add(4) = total_payload_len as u8;
-    *buf.add(5) = 0x0A;
-
-    let mut p = 6usize;
-    let mut n = len;
-    while n > 127 {
-        *buf.add(p) = ((n & 0x7F) as u8) | 0x80;
-        p += 1;
-        n >>= 7;
-    }
-    *buf.add(p) = n as u8;
-
-    frame_len as i32
 }
 
 // ==========================================

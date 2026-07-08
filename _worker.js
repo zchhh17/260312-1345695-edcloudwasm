@@ -60,14 +60,12 @@ const textEncoder = new TextEncoder(), textDecoder = new TextDecoder();
 import wasmModule from './protocol.wasm';
 const instance = new WebAssembly.Instance(wasmModule);
 const {
-    memory, getUuidPtr, getResultPtr, getDataPtr, getHttpAuthPtr, getSocks5AuthPtr, getGrpcFramePtr, getGrpcFrameMaxPayloadWasm, setHttpAuthLenWasm, setSocks5AuthLenWasm, parseProtocolWasm, parseUrlWasm,
-    initCredentialsWasm, getPanelHtmlPtr, getPanelHtmlLen, getErrorHtmlPtr, getErrorHtmlLen, getCorrectAddrTypeWasm, getTemplateWasm, getSecretStringWasm, encodeGrpcFrameWasm
+    memory, getUuidPtr, getResultPtr, getDataPtr, getHttpAuthPtr, getSocks5AuthPtr, setHttpAuthLenWasm, setSocks5AuthLenWasm, parseProtocolWasm, parseUrlWasm,
+    initCredentialsWasm, getPanelHtmlPtr, getPanelHtmlLen, getErrorHtmlPtr, getErrorHtmlLen, getCorrectAddrTypeWasm, getTemplateWasm, getSecretStringWasm
 } = instance.exports;
 const wasmMem = new Uint8Array(memory.buffer);
 const wasmRes = new Int32Array(memory.buffer, getResultPtr(), 32);
 const dataPtr = getDataPtr();
-const grpcFramePtr = getGrpcFramePtr();
-const grpcFrameMaxPayload = getGrpcFrameMaxPayloadWasm();
 let isInitialized = false, rawHtml = null, rawErrorHtml = null, config = null, cachedTemplates = null, strList = null, userAgentSuffix = null;
 const decompressWasm = async (ptrFn, lenFn) => {
     const ptr = ptrFn(), len = lenFn();
@@ -334,7 +332,26 @@ const parseAuthString = (authParam) => {
 const createConnect = (hostname, port, socketOptions, socket = connect({hostname, port}, socketOptions)) => socket.opened.then(() => socket);
 const concurrentConnect = (hostname, port, limit = concurrency, socketOptions) => {
     if (limit === 1) return createConnect(hostname, port, socketOptions);
-    return Promise.any(Array(limit).fill(null).map(() => createConnect(hostname, port, socketOptions)));
+    let settled = false, winner = null;
+    const sockets = new Array(limit);
+    const closeSocket = socket => {try {socket?.close()} catch {}};
+    const attempts = Array.from({length: limit}, (_, i) => {
+        const socket = connect({hostname, port}, socketOptions);
+        sockets[i] = socket;
+        return createConnect(hostname, port, socketOptions, socket).then(openedSocket => {
+            if (settled && openedSocket !== winner) closeSocket(openedSocket);
+            return openedSocket;
+        });
+    });
+    return Promise.any(attempts).then(socket => {
+        settled = true, winner = socket;
+        for (const other of sockets) if (other !== socket) closeSocket(other);
+        return socket;
+    }, err => {
+        settled = true;
+        for (const socket of sockets) closeSocket(socket);
+        throw err;
+    });
 };
 const connectViaSocksProxy = async (targetAddrType, targetPortNum, socksAuth, addrBytes, limit) => {
     const socksSocket = await concurrentConnect(socksAuth.hostname, socksAuth.port, limit);
@@ -1007,11 +1024,24 @@ const handleGrpcPost = async (request, reader, buffer, used) => {
                 send: (chunk) => {
                     const len = chunk.byteLength;
                     if (!len) return;
-                    if (len > grpcFrameMaxPayload) return close();
-                    wasmMem.set(chunk, grpcFramePtr);
-                    const frameLen = encodeGrpcFrameWasm(len);
-                    if (frameLen <= 0) return close();
-                    controller.enqueue(wasmMem.slice(grpcFramePtr, grpcFramePtr + frameLen));
+                    let varintLen = 1;
+                    for (let v = len >>> 7; v; v >>>= 7) varintLen++;
+                    const totalPayloadLen = 1 + varintLen + len;
+                    const grpcFrame = new Uint8Array(5 + totalPayloadLen);
+                    grpcFrame[0] = 0;
+                    grpcFrame[1] = totalPayloadLen >>> 24;
+                    grpcFrame[2] = totalPayloadLen >>> 16;
+                    grpcFrame[3] = totalPayloadLen >>> 8;
+                    grpcFrame[4] = totalPayloadLen;
+                    grpcFrame[5] = 0x0A;
+                    let p = 6, v = len;
+                    while (v > 127) {
+                        grpcFrame[p++] = (v & 0x7F) | 0x80;
+                        v >>>= 7;
+                    }
+                    grpcFrame[p++] = v;
+                    grpcFrame.set(chunk, p);
+                    controller.enqueue(grpcFrame);
                 }
             };
             (async () => {

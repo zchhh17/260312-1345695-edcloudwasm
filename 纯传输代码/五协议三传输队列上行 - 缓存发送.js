@@ -299,7 +299,26 @@ const isIPv4 = (str) => {
 const createConnect = (hostname, port, socketOptions, socket = connect({hostname, port}, socketOptions)) => socket.opened.then(() => socket);
 const concurrentConnect = (hostname, port, limit = concurrency, socketOptions) => {
     if (limit === 1) return createConnect(hostname, port, socketOptions);
-    return Promise.any(Array(limit).fill(null).map(() => createConnect(hostname, port, socketOptions)));
+    let settled = false, winner = null;
+    const sockets = new Array(limit);
+    const closeSocket = socket => {try {socket?.close()} catch {}};
+    const attempts = Array.from({length: limit}, (_, i) => {
+        const socket = connect({hostname, port}, socketOptions);
+        sockets[i] = socket;
+        return createConnect(hostname, port, socketOptions, socket).then(openedSocket => {
+            if (settled && openedSocket !== winner) closeSocket(openedSocket);
+            return openedSocket;
+        });
+    });
+    return Promise.any(attempts).then(socket => {
+        settled = true, winner = socket;
+        for (const other of sockets) if (other !== socket) closeSocket(other);
+        return socket;
+    }, err => {
+        settled = true;
+        for (const socket of sockets) closeSocket(socket);
+        throw err;
+    });
 };
 const connectViaSocksProxy = async (targetAddrType, targetPortNum, socksAuth, addrBytes, limit) => {
     const socksSocket = await concurrentConnect(socksAuth.hostname, socksAuth.port, limit);
