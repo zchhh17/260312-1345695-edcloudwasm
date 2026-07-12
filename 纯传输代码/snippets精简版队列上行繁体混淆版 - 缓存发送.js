@@ -1,10 +1,10 @@
 import {connect as 建立雲端連線} from 'cloudflare:sockets';
 const 使用者識別碼 = 'd342d11e-d424-4583-b36e-524ab1f0afa4';
 const 密碼雜湊值 = '509eece82eb6910bebef9af9496092d3244b6c0d69ef3aaa4b12c565';
-const 緩衝區大小 = 192 * 1024;
+const 緩衝區大小 = 256 * 1024;
 const 啟動閾值 = 50 * 1024 * 1024;
 const 最大區塊長度 = 64 * 1024;
-const 刷新時間 = 3;
+const 刷新時間 = 4;
 const 網址參數快取限制 = 20;
 const 代理策略順序 = ['socks', 'http'];
 const 代理位址表 = {EU: 'ProxyIP.DE.CMLiussss.net', AS: 'ProxyIP.SG.CMLiussss.net', JP: 'ProxyIP.JP.CMLiussss.net', US: 'ProxyIP.US.CMLiussss.net'};
@@ -235,23 +235,18 @@ const 建立傳輸控制連線 = async (已解析請求, 請求) => {
 const 手動資料管線 = async (可讀流, 可寫通道, 關閉連線) => {
     const 安全緩衝區大小 = 緩衝區大小 - 最大區塊長度, 快速刷新偏移量 = 最大區塊長度 << 1;
     let 緩衝區 = new ArrayBuffer(緩衝區大小), 備用緩衝區 = new ArrayBuffer(最大區塊長度), 緩衝區視圖 = new Uint8Array(緩衝區);
-    let 偏移量 = 0, 總位元組 = 0, 時間 = 0, 計時器識別 = null, 恢復函式 = null, 正在讀取 = false, 需要刷新 = false, 保護刷新 = false, 刷新延遲計數 = 0;
+    let 偏移量 = 0, 總位元組 = 0, 時間 = 0, 計時器識別 = null, 恢復函式 = null, 正在讀取 = false, 需要刷新 = false, 保護刷新 = false;
     let 已關閉 = false, 快速刷新 = true;
-    const 刷新輸出 = (強制 = false) => {
+    const 刷新輸出 = () => {
         if (正在讀取) return 需要刷新 = true;
         快速刷新 = 偏移量 < 快速刷新偏移量;
-        if (!強制 && 偏移量 > 0 && 偏移量 < 快速刷新偏移量 && !已關閉 && 刷新延遲計數 < 1) {
-            刷新延遲計數++, 需要刷新 = false;
-            計時器識別 && clearTimeout(計時器識別), 計時器識別 = setTimeout(刷新輸出, 1);
-            return;
-        }
         if (偏移量 > 0 && !已關閉) {
             偏移量 > 安全緩衝區大小
                 ? (可寫通道.send(緩衝區視圖.subarray(0, 偏移量)), 緩衝區 = new ArrayBuffer(緩衝區大小), 緩衝區視圖 = new Uint8Array(緩衝區))
                 : 可寫通道.send(緩衝區視圖.slice(0, 偏移量));
             偏移量 = 0;
         }
-        需要刷新 = false, 保護刷新 = false, 刷新延遲計數 = 0, 計時器識別 && (clearTimeout(計時器識別), 計時器識別 = null), 恢復函式?.(), 恢復函式 = null;
+        需要刷新 = false, 保護刷新 = false, 計時器識別 && (clearTimeout(計時器識別), 計時器識別 = null), 恢復函式?.(), 恢復函式 = null;
     };
     const 讀取器 = 可讀流.getReader({mode: 'byob'});
     try {
@@ -269,18 +264,18 @@ const 手動資料管線 = async (可讀流, 可寫通道, 關閉連線) => {
                 需要刷新 && 刷新輸出();
                 continue;
             }
-            偏移量 += 區塊長度;
-            if (需要刷新) {
+            偏移量 += 區塊長度, 總位元組 += 區塊長度;
+            if (需要刷新 || 區塊長度 < 2048) {
                 刷新輸出();
             } else {
                 if (快速刷新 || 區塊長度 < 28672) {
-                    總位元組 = 0, 時間 = 1;
-                } else if ((總位元組 += 區塊長度) > 啟動閾值) 時間 = 刷新時間;
+                    總位元組 = 0, 時間 = 3;
+                } else if (總位元組 > 啟動閾值) 時間 = 刷新時間;
                 計時器識別 ||= setTimeout(刷新輸出, 時間), 保護刷新 = 區塊長度 < 最大區塊長度;
                 偏移量 > 安全緩衝區大小 && (總位元組 > 啟動閾值 ? await new Promise(結果值 => 恢復函式 = 結果值) : 刷新輸出());
             }
         }
-    } catch {關閉連線?.(), 已關閉 = true} finally {正在讀取 = false, 刷新輸出(true)}
+    } catch {關閉連線?.(), 已關閉 = true} finally {正在讀取 = false, 刷新輸出()}
 };
 const 建立緩衝傳輸控制寫入器 = (寫入函式, 關閉連線) => {
     const 佇列 = new Array(2048);
