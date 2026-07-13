@@ -832,7 +832,7 @@ const manualPipe = async (readable, writable, close) => {
                 flushBuffer();
             } else {
                 if (fastFlush || chunkLen < 28672) {
-                    totalBytes = 0, time = 3;
+                    totalBytes = 0, time = 2;
                 } else if (totalBytes > startThreshold) time = flushTime;
                 timerId ||= setTimeout(flushBuffer, time), protectFlush = chunkLen < maxChunkLen;
                 offset > safeBufferSize && (totalBytes > startThreshold ? await new Promise(r => resume = r) : flushBuffer());
@@ -1188,7 +1188,7 @@ export default {
         }
         if (request.headers.get('Upgrade') === 'websocket') {
             const {0: clientSocket, 1: webSocket} = new WebSocketPair();
-            webSocket.accept({allowHalfOpen: true}), webSocket.binaryType = "arraybuffer";
+            webSocket.accept(), webSocket.binaryType = "arraybuffer";
             handleWebSocketConn(webSocket, request);
             return new Response(null, {status: 101, webSocket: clientSocket});
         }

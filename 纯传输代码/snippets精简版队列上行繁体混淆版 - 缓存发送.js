@@ -269,7 +269,7 @@ const 手動資料管線 = async (可讀流, 可寫通道, 關閉連線) => {
                 刷新輸出();
             } else {
                 if (快速刷新 || 區塊長度 < 28672) {
-                    總位元組 = 0, 時間 = 3;
+                    總位元組 = 0, 時間 = 2;
                 } else if (總位元組 > 啟動閾值) 時間 = 刷新時間;
                 計時器識別 ||= setTimeout(刷新輸出, 時間), 保護刷新 = 區塊長度 < 最大區塊長度;
                 偏移量 > 安全緩衝區大小 && (總位元組 > 啟動閾值 ? await new Promise(結果值 => 恢復函式 = 結果值) : 刷新輸出());
@@ -380,7 +380,7 @@ export default {
         if (請求.headers.get('Upgrade') === 'websocket') {
             const {0: 客戶端插槽, 1: 網頁套接字連線} = new WebSocketPair();
             // @ts-ignore
-            網頁套接字連線.accept({allowHalfOpen: true}), 網頁套接字連線.binaryType = "arraybuffer";
+            網頁套接字連線.accept(), 網頁套接字連線.binaryType = "arraybuffer";
             處理網頁套接字連線(網頁套接字連線, 請求);
             return new Response(null, {status: 101, webSocket: 客戶端插槽});
         }
