@@ -61,7 +61,7 @@ import wasmModule from './protocol.wasm';
 const instance = new WebAssembly.Instance(wasmModule);
 const {
     memory, getUuidPtr, getResultPtr, getDataPtr, getHttpAuthPtr, getSocks5AuthPtr, setHttpAuthLenWasm, setSocks5AuthLenWasm, parseProtocolWasm, parseUrlWasm,
-    initCredentialsWasm, getPanelHtmlPtr, getPanelHtmlLen, getErrorHtmlPtr, getErrorHtmlLen, getCorrectAddrTypeWasm, getTemplateWasm, getSecretStringWasm
+    initCredentialsWasm, getPanelHtmlPtr, getPanelHtmlLen, getErrorHtmlPtr, getErrorHtmlLen, getTemplateWasm, getSecretStringWasm
 } = instance.exports;
 const wasmMem = new Uint8Array(memory.buffer);
 const wasmRes = new Int32Array(memory.buffer, getResultPtr(), 32);
@@ -328,6 +328,29 @@ const parseAuthString = (authParam) => {
     }
     const [hostname, port] = parseHostPort(hostStr, 1080);
     return {username, password, hostname, port};
+};
+const isIPv4 = (str) => {
+    const len = str.length;
+    if (len > 15 || len < 7) return false;
+    let part = 0, dots = 0, partLen = 0, head = 0;
+    for (let i = 0; i < len; i++) {
+        const charCode = str.charCodeAt(i);
+        if (charCode === 46) {
+            if (dots === 3 || partLen === 0 || (partLen > 1 && head === 48)) return false;
+            dots++, part = 0, partLen = 0;
+        } else {
+            const digit = (charCode - 48) >>> 0;
+            if (digit > 9) return false;
+            if (partLen === 0) head = charCode;
+            partLen++, part = part * 10 + digit;
+            if (part > 255 || partLen > 3) return false;
+        }
+    }
+    return dots === 3 && partLen > 0 && !(partLen > 1 && head === 48);
+};
+const addrTypeIs = (hostname) => {
+    const char0 = hostname.charCodeAt(0);
+    return (char0 - 48) >>> 0 > 9 ? (char0 === 91 ? 4 : 3) : isIPv4(hostname) ? 1 : 3;
 };
 const createConnect = (hostname, port, socketOptions, socket = connect({hostname, port}, socketOptions)) => socket.opened.then(() => socket);
 const concurrentConnect = (hostname, port, limit = concurrency, socketOptions) => {
@@ -644,10 +667,7 @@ const connectNat64 = async (addrType, port, nat64Auth, addrBytes, proxyAll, limi
     const nat64Prefixes = nat64Auth.charCodeAt(0) === 91 ? nat64Auth.slice(1, -1) : nat64Auth;
     if (!proxyAll) return concurrentConnect(`[${nat64Prefixes}6815:3598]`, port, limit);
     const hostname = binaryAddrToString(addrType, addrBytes);
-    if (isHttp) {
-        wasmMem.set(addrBytes, dataPtr);
-        addrType = getCorrectAddrTypeWasm(addrBytes.length);
-    }
+    if (isHttp) addrType = addrTypeIs(hostname);
     if (addrType === 3) {
         const answer = await concurrentDnsResolve(hostname, 'A');
         const aRecord = answer?.find(record => record.type === 1);
@@ -718,10 +738,7 @@ const strategyExecutorMap = new Map([
     // @ts-ignore
     [5, async ({addrType, port, addrBytes, isHttp}, param) => {
         let targetIp = binaryAddrToString(addrType, addrBytes);
-        if (isHttp) {
-            wasmMem.set(addrBytes, dataPtr);
-            addrType = getCorrectAddrTypeWasm(addrBytes.length);
-        }
+        if (isHttp) addrType = addrTypeIs(targetIp);
         if (addrType === 3) {
             const answer = await concurrentDnsResolve(targetIp, 'A');
             const aRecord = answer?.find(record => record.type === 1);
