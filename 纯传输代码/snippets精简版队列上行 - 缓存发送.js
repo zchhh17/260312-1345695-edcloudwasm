@@ -352,7 +352,10 @@ const handleWebSocketConn = async (webSocket, request) => {
     // @ts-ignore
     const earlyData = protocolHeader ? Uint8Array.fromBase64(protocolHeader, {alphabet: 'base64url'}) : null;
     let tcpWrite, processingQueue = null, parsedRequest, tcpSocket;
-    const close = () => {webSocket.close()};
+    const close = () => {
+        try {tcpSocket?.close()} catch {}
+        try {webSocket.close()} catch {}
+    };
     const processMessage = chunk => {
         try {
             if (tcpWrite) return tcpWrite(chunk);
@@ -378,6 +381,7 @@ const handleWebSocketConn = async (webSocket, request) => {
     if (earlyData) processingQueue(earlyData);
     webSocket.addEventListener("message", event => (tcpWrite || processingQueue)(event.data));
     webSocket.addEventListener("error", close);
+    webSocket.addEventListener("close", close);
 };
 export default {
     async fetch(request) {
